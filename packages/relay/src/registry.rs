@@ -106,3 +106,32 @@ impl Registry {
         self.devices.iter().filter(|d| !d.revoked)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_registry() -> Registry {
+        let dir = std::env::temp_dir().join(format!("whalemaid-relay-test-{}", Uuid::new_v4()));
+        Registry::load(dir.join("devices.json"), 5202).unwrap()
+    }
+
+    #[test]
+    fn register_and_revoke() {
+        let mut reg = temp_registry();
+        let (record, token) = reg.register().unwrap();
+        assert_eq!(record.token_digest, digest(&token));
+        assert!(reg.active().any(|d| d.id == record.id));
+        assert!(reg.revoke(&record.id));
+        assert!(!reg.active().any(|d| d.id == record.id));
+        assert!(!reg.revoke(&record.id), "重复吊销返回 false");
+    }
+
+    #[test]
+    fn ports_are_distinct() {
+        let mut reg = temp_registry();
+        let (a, _) = reg.register().unwrap();
+        let (b, _) = reg.register().unwrap();
+        assert_ne!(a.port, b.port);
+    }
+}

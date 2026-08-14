@@ -37,9 +37,18 @@ async fn main() -> Result<()> {
             .await?;
     }
 
-    let app = api::router(state);
+    let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
     println!("[whalemaid-relay] 控制面监听 http://{}", config.listen);
+
+    // 优雅退出：Ctrl-C 时先停 sidecar（rathole），再退
+    let state_for_signal = state.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        state_for_signal.sidecar.lock().await.stop().await;
+        std::process::exit(0);
+    });
+
     axum::serve(listener, app).await?;
     Ok(())
 }

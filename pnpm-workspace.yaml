@@ -6,6 +6,8 @@ packages:
 allowBuilds:
   esbuild: set this to true or false
 
-onlyBuiltDependencies:
+# esbuild 的 postinstall 仅为兜底下载；二进制由 @esbuild/<platform> 平台包提供，显式忽略以通过 pnpm 严格构建检查
+ignoredBuiltDependencies:
   - esbuild
+
 verifyDepsBeforeRun: false
