@@ -6,7 +6,10 @@
 
 1. [ ] **语音 API 实测**（S4 遗留）：注册阿里云 DashScope，开通实时语音识别（Paraformer），用真实 key 实测「定制热词 HTTP API」的鉴权与批量增删（REQ-021/034）。测完把接口结论回写 ADR-034。
 2. [ ] **视觉 API key**：准备 DeepSeek API key（deepseek-ocr）与通义 VL key 各一，供 V1 视觉适配器实测（REQ-022）。
-3. [ ] **手机实机测试**：手机与电脑同一局域网 → 电脑端插件 host 改为 `0.0.0.0`（config）→ 手机浏览器打开 `http://<电脑IP>:3180/m` → 按 scripts/smoke.mjs 的流程点一遍（REQ-001 直连）。
+3. [ ] **手机实机测试**（桌面侧实机我已验证通过，缺手机端）：
+   - 电脑端：把插件配置 host 改为 `0.0.0.0`（profile 的 cordis.patch.yml 里给 `whalemaid` 行加 config，或后续版本做设置项）；
+   - 手机与电脑同一局域网，浏览器打开 `http://<电脑IP>:3180/m`（移动 UI 构建完成后）；
+   - 设备 ID 与长期密码在 `<DSH_HOME>/whalemaid/store.json`（生产版会做设置页展示）。
 4. [ ] **吉祥物草图**：女仆装鲸鱼娘（M2 发布前需要，非阻塞）。
 5. [ ] **试用月数定稿**：当前暂定 2 个月（DESIGN §12-Q1）。
 

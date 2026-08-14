@@ -27,12 +27,22 @@
 
 | # | 任务 | 产出 | 状态 |
 |---|---|---|---|
-| 1 | 决策回溯 | `docs/adr/INDEX.md`（ADR-001..028） | ✅ |
-| 2 | 需求编号表 | `docs/requirements.md`（REQ-001..035 + REQ-REJ-001..007，均带验收标准） | ✅ |
-| 3 | 三平台 spike | 结论回写 ADR | ⬜ 下一步 |
-| 4 | 协议 v1 | `docs/protocol.md`：PROTO-001.. 信封/capability/三通道/错误码 | ⬜ 依赖 3 |
-| 5 | 威胁模型 v1 | `docs/threat-model.md`：TM-001.. 对策→检查点 | ⬜ 依赖 4 |
-| 6 | 仓库骨架 | monorepo（**api-contract 独立包**：统一 API 契约，多端共用）+ LICENSE（AGPL-3.0）+ SECURITY.md + 模板 + CI | ⬜ 依赖 1、2 |
+| 1 | 决策回溯 | `docs/adr/INDEX.md`（ADR-001..036） | ✅ |
+| 2 | 需求编号表 | `docs/requirements.md`（REQ + REQ-REJ，均带验收标准） | ✅ |
+| 3 | 三平台 spike + 实机冒烟 | spike 结论 + **真实 DSH 测试实例冒烟 7/7 通过** | ✅ |
+| 4 | 协议 v1 | `docs/protocol.md`（PROTO-001..009） | ✅ |
+| 5 | 威胁模型 v1 | `docs/threat-model.md`（TM-001..013） | ✅ |
+| 6 | 仓库骨架 | monorepo + AGPL-3.0 + SECURITY + 模板 + CI（已绿） | ✅ |
+
+### 实机测试结论（2026-08-15，独立实例 3181/3180，3080 会话本体全程无恙）
+
+- 插件在真实 DSH host 挂载成功（`apply(ctx, config)` 惯例、`sessions` 复数签名、RpcRequest/RpcResponse 纪律透传）；
+- 接口级冒烟 7/7：handshake → 挑战应答绑定 → 网关拒无 token → session.list 真实透传 → 坏凭据拒绝 → browse 目录浏览 → 全盘范围策略拒绝；
+- 关键修复沉淀：信封解包、WebCrypto P1363 验签、nonce 绑定公钥、目录选择器 pin browse（禁用 auto 行 + 插入 browse 行）。
+
+### M1 剩余（测试 loop 继续）
+
+- TODO(REQ-003) 临时密码；TODO(REQ-008) permission.get/set 透传；SSE 桥接 DSH host/* 事件（PROTO-004 帧）；voice/vision/hotwords（V1）；移动端业务视图（目录模式/引用复制/工作区创建 UI）；workspace.create 冒烟（需 WHALEMAID_SMOKE_WORKSPACE=1）。
 
 ### Spike 清单（先验证再架构，防返工）
 
