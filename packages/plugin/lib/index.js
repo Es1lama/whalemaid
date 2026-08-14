@@ -681,6 +681,57 @@ function createVisionAdapter(cfg, resolveKey) {
   }
 }
 
+// src/relay.ts
+import { spawn } from "node:child_process";
+import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
+var RelayClient = class {
+  constructor(cfg, log) {
+    this.cfg = cfg;
+    this.log = log;
+  }
+  child = null;
+  timer;
+  async start() {
+    const base = this.cfg.relayUrl.replace(/\/$/, "");
+    const res = await fetch(`${base}/devices`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.cfg.relayToken}`, "content-type": "application/json" }
+    });
+    if (!res.ok) throw new Error(`\u4E2D\u7EE7\u6CE8\u518C\u5931\u8D25: ${res.status} ${await res.text()}`);
+    const binding = await res.json();
+    const host = new URL(base).hostname;
+    const cfgText = [
+      "[client]",
+      `remote_addr = "${host}:${this.cfg.relayPort}"`,
+      "",
+      `[client.services.${binding.service}]`,
+      `token = "${binding.token}"`,
+      `local_addr = "127.0.0.1:${this.cfg.pluginPort}"`,
+      ""
+    ].join("\n");
+    const dir = join3(this.cfg.dataDir, "relay");
+    mkdirSync2(dir, { recursive: true });
+    const cfgFile = join3(dir, "rathole-client.toml");
+    writeFileSync2(cfgFile, cfgText, { mode: 384 });
+    this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: "ignore" });
+    this.child.on("exit", (code) => this.log(`[whalemaid] rathole \u5BA2\u6237\u7AEF\u9000\u51FA code=${code}`));
+    this.timer = setInterval(() => {
+      fetch(`${base}/devices/${binding.id}/heartbeat`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.cfg.relayToken}` }
+      }).catch(() => void 0);
+    }, 2e4);
+    this.timer.unref();
+    return binding;
+  }
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.child?.kill();
+    this.child = null;
+  }
+};
+
 // src/config.ts
 import Schema from "@deepseek-ai/schemastery";
 var Config = Schema.object({
@@ -692,7 +743,11 @@ var Config = Schema.object({
   voiceModel: Schema.string().default(""),
   visionProvider: Schema.string().default(""),
   visionCredentialRef: Schema.string().default(""),
-  visionModel: Schema.string().default("")
+  visionModel: Schema.string().default(""),
+  relayUrl: Schema.string().default(""),
+  relayToken: Schema.string().default(""),
+  relayPort: Schema.number().default(2333),
+  ratholeBin: Schema.string().default("rathole")
 });
 
 // src/index.ts
@@ -707,7 +762,11 @@ var DEFAULTS = {
   voiceModel: "",
   visionProvider: "",
   visionCredentialRef: "",
-  visionModel: ""
+  visionModel: "",
+  relayUrl: "",
+  relayToken: "",
+  relayPort: 2333,
+  ratholeBin: "rathole"
 };
 function apply(ctx, config) {
   const resolved = { ...DEFAULTS, ...config };
@@ -751,7 +810,22 @@ function apply(ctx, config) {
   } catch {
     ctx.logger.warn("[whalemaid] SSE \u4E8B\u4EF6\u6865\u6682\u4E0D\u53EF\u7528\uFF08\u4E8B\u4EF6\u540D\u672A\u5728\u5BBF\u4E3B\u8F6C\u53D1\u5217\u8868\u4E2D\uFF09");
   }
+  const relay = resolved.relayUrl ? new RelayClient(
+    {
+      relayUrl: resolved.relayUrl,
+      relayToken: resolved.relayToken,
+      ratholeBin: resolved.ratholeBin,
+      relayPort: resolved.relayPort,
+      pluginPort: resolved.port,
+      dataDir: store.file.replace(/store\.json$/, "")
+    },
+    (msg) => ctx.logger.info(msg)
+  ) : null;
+  if (relay) {
+    relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 service=${b.service} port=${b.port}\uFF08\u624B\u673A\u7ECF\u4E2D\u7EE7\u7528\u8BE5\u7AEF\u53E3\u8BBF\u95EE\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
+  }
   ctx.effect(() => () => {
+    relay?.stop();
     hub.dispose();
     server.close();
   });

@@ -9,6 +9,7 @@ import { EventHub } from './events.js'
 import { createWhalemaidServer, type HostApiProxy } from './routes.js'
 import { createVoiceAdapter } from './providers/voice.js'
 import { createVisionAdapter } from './providers/vision.js'
+import { RelayClient } from './relay.js'
 
 export const name = 'whalemaid'
 
@@ -28,6 +29,10 @@ const DEFAULTS: Config = {
   visionProvider: '',
   visionCredentialRef: '',
   visionModel: '',
+  relayUrl: '',
+  relayToken: '',
+  relayPort: 2333,
+  ratholeBin: 'rathole',
 }
 
 export function apply(ctx: Context, config?: Config): void {
@@ -88,7 +93,29 @@ export function apply(ctx: Context, config?: Config): void {
     ctx.logger.warn('[whalemaid] SSE 事件桥暂不可用（事件名未在宿主转发列表中）')
   }
 
+  // 中继接入（docs/deploy-server.md）：注册设备 → rathole 客户端 sidecar → 心跳
+  const relay = resolved.relayUrl
+    ? new RelayClient(
+        {
+          relayUrl: resolved.relayUrl,
+          relayToken: resolved.relayToken,
+          ratholeBin: resolved.ratholeBin,
+          relayPort: resolved.relayPort,
+          pluginPort: resolved.port,
+          dataDir: store.file.replace(/store\.json$/, ''),
+        },
+        (msg) => ctx.logger.info(msg),
+      )
+    : null
+  if (relay) {
+    relay
+      .start()
+      .then((b) => ctx.logger.info(`[whalemaid] 中继已接入 service=${b.service} port=${b.port}（手机经中继用该端口访问）`))
+      .catch((e) => ctx.logger.warn(`[whalemaid] 中继接入失败: ${e instanceof Error ? e.message : String(e)}`))
+  }
+
   ctx.effect(() => () => {
+    relay?.stop()
     hub.dispose()
     server.close()
   })

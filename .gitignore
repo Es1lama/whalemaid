@@ -8,3 +8,4 @@ dist/
 .cache/
 packages/relay/target/
 packages/relay/data/
+.relay-test-data/

@@ -1,0 +1,19 @@
+# SPEC: docs/deploy-server.md 一键部署
+services:
+  whalemaid-relay:
+    build:
+      context: ../..
+      dockerfile: packages/relay/Dockerfile
+    ports:
+      - "2333:2333" # rathole 设备隧道（手机/被控端经此转发）
+      - "9080:9080" # 控制面管理 API（生产建议防火墙限源或改绑内网）
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN:?请设置管理密钥}
+      - WHALEMAID_RELAY_LISTEN=0.0.0.0:9080
+      - WHALEMAID_RELAY_DATA=/data
+    volumes:
+      - whalemaid-data:/data
+    restart: unless-stopped
+
+volumes:
+  whalemaid-data:

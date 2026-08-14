@@ -17,6 +17,11 @@ export interface Config {
   visionProvider: string
   visionCredentialRef: string
   visionModel: string
+  /** 中继接入（'' = 未启用，见 docs/deploy-server.md） */
+  relayUrl: string
+  relayToken: string
+  relayPort: number
+  ratholeBin: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -29,4 +34,8 @@ export const Config: Schema<Config> = Schema.object({
   visionProvider: Schema.string().default(''),
   visionCredentialRef: Schema.string().default(''),
   visionModel: Schema.string().default(''),
+  relayUrl: Schema.string().default(''),
+  relayToken: Schema.string().default(''),
+  relayPort: Schema.number().default(2333),
+  ratholeBin: Schema.string().default('rathole'),
 })

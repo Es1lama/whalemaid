@@ -26,6 +26,8 @@ pub struct Registry {
     file: PathBuf,
     devices: Vec<DeviceRecord>,
     next_port: u16,
+    /** 心跳时间戳（内存态，不落盘：在线状态是读时计算的瞬态） */
+    last_seen: std::collections::HashMap<String, u64>,
 }
 
 pub fn digest(value: &str) -> String {
@@ -54,7 +56,7 @@ impl Registry {
             .max()
             .map(|p| p + 1)
             .unwrap_or(port_base);
-        Ok(Self { file, devices, next_port })
+        Ok(Self { file, devices, next_port, last_seen: std::collections::HashMap::new() })
     }
 
     fn persist(&self) -> Result<()> {
@@ -105,6 +107,31 @@ impl Registry {
     pub fn active(&self) -> impl Iterator<Item = &DeviceRecord> {
         self.devices.iter().filter(|d| !d.revoked)
     }
+
+    /// 心跳：更新内存时间戳；返回该设备是否已知且未吊销
+    pub fn touch(&mut self, id: &str) -> bool {
+        let known = self.devices.iter().any(|d| d.id == id && !d.revoked);
+        if known {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            self.last_seen.insert(id.to_string(), now);
+        }
+        known
+    }
+
+    /// 在线判定：最近一次心跳在超时窗口内
+    pub fn online(&self, id: &str, timeout_secs: u64) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.last_seen
+            .get(id)
+            .map(|t| now.saturating_sub(*t) <= timeout_secs)
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +160,15 @@ mod tests {
         let (a, _) = reg.register().unwrap();
         let (b, _) = reg.register().unwrap();
         assert_ne!(a.port, b.port);
+    }
+
+    #[test]
+    fn heartbeat_and_online() {
+        let mut reg = temp_registry();
+        let (record, _) = reg.register().unwrap();
+        assert!(!reg.online(&record.id, 45), "无心跳应离线");
+        assert!(reg.touch(&record.id));
+        assert!(reg.online(&record.id, 45), "心跳后应在线");
+        assert!(!reg.touch("unknown-id"), "未知设备心跳返回 false");
     }
 }
