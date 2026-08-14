@@ -1,29 +1,33 @@
 # 需要本人完成的事项清单（NEEDED BY OWNER）
 
 > 本清单只列"必须由仓库所有者（你）亲自做"的事，避免来回找。做完一项在括号里写日期。
+> 验收口径（goal）：**除注册邮箱/短信厂商、填入语音/视觉 key、准备一台服务器外，其余已全部完成并可部署。**
 
-## 短期（本周）
+## 上架前（验收口径内仅剩这些）
 
-1. [ ] **语音 API 实测**（S4 遗留）：注册阿里云 DashScope，开通实时语音识别（Paraformer），用真实 key 实测「定制热词 HTTP API」的鉴权与批量增删（REQ-021/034）。测完把接口结论回写 ADR-034。
-2. [ ] **视觉 API key**：准备 DeepSeek API key（deepseek-ocr）与通义 VL key 各一，供 V1 视觉适配器实测（REQ-022）。
-3. [ ] **手机实机测试**（桌面侧实机我已验证通过，缺手机端）：
-   - 电脑端：把插件配置 host 改为 `0.0.0.0`（profile 的 cordis.patch.yml 里给 `whalemaid` 行加 config，或后续版本做设置项）；
-   - 手机与电脑同一局域网，浏览器打开 `http://<电脑IP>:3180/m`（移动 UI 构建完成后）；
-   - 设备 ID 与长期密码在 `<DSH_HOME>/whalemaid/store.json`（生产版会做设置页展示）。
-4. [ ] **吉祥物草图**：女仆装鲸鱼娘（M2 发布前需要，非阻塞）。
-5. [ ] **试用月数定稿**：当前暂定 2 个月（DESIGN §12-Q1）。
+1. [ ] **邮件/短信供应商注册与对接**：控制台（私有仓 whalemaid-console）已预制统一接口 + 通用 HTTP 适配器；你注册厂商后设置环境变量即用：
+   - `WHALEMAID_EMAIL_ENDPOINT` / `WHALEMAID_EMAIL_TOKEN`（邮件，如 Resend/阿里云邮件推送的 HTTP 网关）
+   - `WHALEMAID_SMS_ENDPOINT` / `WHALEMAID_SMS_TOKEN`（短信，如阿里云短信 HTTP 网关）
+   - 真实短信验证码存储/校验：接替现在的 dev 打印模式（console src/main.ts 标注处）。
+2. [ ] **填入语音/视觉 API key**：插件侧（宿主 dsh-credentials 引用名 + 配置）：
+   - 语音：`voiceProvider=openai|groq|dashscope` + `voiceCredentialRef=XXX_API_KEY`（DashScope 文件识别与官方热词 API 仍需你注册后实测，见第 5 条）；
+   - 视觉：`visionProvider=deepseek-ocr|qwen-vl|openai-vision|grok-vision|gemini` + `visionCredentialRef`。
+3. [ ] **准备一台服务器**：`packages/relay` docker compose 一键部署（见 docs/deploy-server.md）；服务器需开放 2333（隧道）与 9080（控制面，建议防火墙限源）。
 
-## Phase B 前（不着急，但都是硬门槛）
+## 实机测试（我已做完桌面侧全部；剩手机端人工步骤）
+
+4. [ ] **手机实机**：电脑端插件配置 `host: 0.0.0.0`（profile cordis.patch.yml）→ 手机装 Android APK（CI 产物或 `gradle assembleDebug`）或开 `http://<电脑IP>:3180/m` → 设备 ID（WHALE-XXXX-XXXX 自定）＋ 长期密码（`<DSH_HOME>/whalemaid/store.json`）。iOS 需你本机有 Xcode 跑真机/模拟器（CI 已验证构建）。
+5. [ ] **DashScope 热词 API 实测**：真实 key 验证官方「定制热词 HTTP API」端点/字段后回写（hotwords 包 dashscope 模式与 ADR-034 标注处）。
+
+## Phase B 前（硬门槛）
 
 6. [ ] 公司主体（大陆）+ ICP 备案。
-7. [ ] 国内短信通道（阿里云短信等）+ 手机号实名策略。
-8. [ ] 微信/支付宝商户号（订阅 3–5 元/月需要）。
-9. [ ] 增值电信业务许可评估（中继/转发类，参照 ToDesk 资质）。
-10. [ ] PIPL 合规：隐私政策、语音/图片单独同意、注销与删除权。
-11. [ ] CLA 上线（社区贡献进闭源仓前，ADR-027）。
+7. [ ] 微信/支付宝商户号（订阅 3–5 元/月）。
+8. [ ] 增值电信业务许可评估（中继/转发类，参照 ToDesk 资质）。
+9. [ ] PIPL 合规：隐私政策、语音/图片单独同意、注销与删除权。
+10. [ ] CLA 上线（社区贡献进闭源仓前，ADR-027）。
+11. [ ] 试用月数定稿（暂定 2 个月，DESIGN §12-Q1）；吉祥物草图（非阻塞）。
 
-## 发布动作（M2/M3，我做不动的）
+## 发布动作（M2/M3）
 
-12. [ ] 官方 DSH 插件商店上架（需官方账号/流程）。
-13. [ ] awesome 双列表 PR（Alex-Yanggg / 0xsline）。
-14. [ ] 开发者群 / linux.do / V2EX 发布帖（用你的身份发）。
+12. [ ] 官方 DSH 插件商店上架；awesome 双列表 PR；开发者群/linux.do/V2EX 发布帖（用你的身份发）。
