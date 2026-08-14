@@ -7,12 +7,26 @@ export interface Config {
   host: string
   /** 监听端口，默认 3180（与 DSH GUI 3080 隔离） */
   port: number
-  /** 数据目录：设备名单/token/审计。默认 ~/.dsh/whalemaid */
+  /** 数据目录：设备名单/token/审计。默认随 DSH_HOME/whalemaid */
   dataDir: string
+  /** BYOK 语音厂商（'' = 未启用）；key 经 dsh-credentials 引用（ADR-013） */
+  voiceProvider: string
+  voiceCredentialRef: string
+  voiceModel: string
+  /** BYOK 视觉厂商（'' = 未启用） */
+  visionProvider: string
+  visionCredentialRef: string
+  visionModel: string
 }
 
 export const Config: Schema<Config> = Schema.object({
   host: Schema.string().default('127.0.0.1'),
   port: Schema.number().default(3180),
   dataDir: Schema.string().default(''),
+  voiceProvider: Schema.string().default(''),
+  voiceCredentialRef: Schema.string().default(''),
+  voiceModel: Schema.string().default(''),
+  visionProvider: Schema.string().default(''),
+  visionCredentialRef: Schema.string().default(''),
+  visionModel: Schema.string().default(''),
 })

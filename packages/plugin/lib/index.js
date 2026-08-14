@@ -1,3 +1,64 @@
+// src/index.ts
+import { credentialRef } from "@deepseek-ai/dsh-credentials";
+
+// ../contract/src/envelope.ts
+var PROTOCOL_VERSION = 1;
+
+// ../contract/src/caps.ts
+var CAPABILITIES = {
+  session: "session",
+  workspaceCreate: "workspace-create",
+  directoryBrowse: "directory-browse",
+  voiceByok: "voice-byok",
+  visionByok: "vision-byok",
+  hotwords: "hotwords",
+  relay: "relay",
+  direct: "direct"
+};
+
+// ../contract/src/errors.ts
+var ERROR_CODES = {
+  badRequest: "bad-request",
+  authFailed: "auth-failed",
+  deviceRevoked: "device-revoked",
+  tokenExpired: "token-expired",
+  rateLimited: "rate-limited",
+  methodUnknown: "method-unknown",
+  capUnsupported: "cap-unsupported",
+  directoryUnreadable: "directory-unreadable",
+  directoryExists: "directory-exists",
+  directoryCreateFailed: "directory-create-failed",
+  scopeDenied: "scope-denied",
+  serverError: "server-error"
+};
+
+// ../contract/src/device.ts
+var DEVICE_ID_PATTERN = /^WHALE-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
+
+// ../contract/src/channels.ts
+var VOICE_PROVIDERS = {
+  /** 阿里 DashScope Paraformer-v2（录音文件识别） */
+  dashscope: "dashscope",
+  /** OpenAI whisper-1（audio/transcriptions） */
+  openai: "openai",
+  /** Groq whisper-large-v3（OpenAI 兼容） */
+  groq: "groq",
+  /** 讯飞（预留，待接入） */
+  iflytek: "iflytek"
+};
+var VISION_PROVIDERS = {
+  /** DeepSeek-OCR（OpenAI 兼容 chat） */
+  deepseekOcr: "deepseek-ocr",
+  /** 通义千问 VL（max/plus 由 model 决定，OpenAI 兼容模式） */
+  qwenVl: "qwen-vl",
+  /** OpenAI 视觉（GPT-5.6 等） */
+  openai: "openai-vision",
+  /** xAI Grok 视觉 */
+  grok: "grok-vision",
+  /** Google Gemini（generateContent） */
+  gemini: "gemini"
+};
+
 // src/store.ts
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -239,42 +300,6 @@ import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { readFileSync as readFileSync2 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join as join2 } from "node:path";
-
-// ../contract/src/envelope.ts
-var PROTOCOL_VERSION = 1;
-
-// ../contract/src/caps.ts
-var CAPABILITIES = {
-  session: "session",
-  workspaceCreate: "workspace-create",
-  directoryBrowse: "directory-browse",
-  voiceByok: "voice-byok",
-  visionByok: "vision-byok",
-  hotwords: "hotwords",
-  relay: "relay",
-  direct: "direct"
-};
-
-// ../contract/src/errors.ts
-var ERROR_CODES = {
-  badRequest: "bad-request",
-  authFailed: "auth-failed",
-  deviceRevoked: "device-revoked",
-  tokenExpired: "token-expired",
-  rateLimited: "rate-limited",
-  methodUnknown: "method-unknown",
-  capUnsupported: "cap-unsupported",
-  directoryUnreadable: "directory-unreadable",
-  directoryExists: "directory-exists",
-  directoryCreateFailed: "directory-create-failed",
-  scopeDenied: "scope-denied",
-  serverError: "server-error"
-};
-
-// ../contract/src/device.ts
-var DEVICE_ID_PATTERN = /^WHALE-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
-
-// src/routes.ts
 var MOBILE_DIST = fileURLToPath(new URL("./mobile-dist/", import.meta.url));
 var CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -353,7 +378,7 @@ async function passThrough(res, rpcId, run) {
   }
 }
 function makeRouter(deps) {
-  const { store, verifier, apiProxy, hub } = deps;
+  const { store, verifier, apiProxy, hub, adapters, caps } = deps;
   return async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
@@ -396,10 +421,7 @@ function makeRouter(deps) {
             return fail(res, rpcId, ERROR_CODES.badRequest, "invalid deviceId or key");
           }
           const nonce = store.addNonce(p.deviceId, p.publicKeyJwk);
-          return ok(res, rpcId, {
-            nonce,
-            caps: [CAPABILITIES.session, CAPABILITIES.workspaceCreate, CAPABILITIES.directoryBrowse, CAPABILITIES.direct]
-          });
+          return ok(res, rpcId, { nonce, caps });
         }
         case "device.bind": {
           const p = payload;
@@ -509,10 +531,22 @@ function makeRouter(deps) {
             rpcId,
             () => apiProxy.host.createDirectory({ rpcId, payload })
           );
-        case "voice.transcribe":
+        case "voice.transcribe": {
+          if (!adapters?.voice) return fail(res, rpcId, ERROR_CODES.capUnsupported, "voice BYOK \u672A\u914D\u7F6E\uFF08\u5BBF\u4E3B\u672A\u8BBE\u7F6E voiceProvider/\u51ED\u636E\uFF09");
+          const p = payload;
+          if (!p.audioBase64) return fail(res, rpcId, ERROR_CODES.badRequest, "audioBase64 required");
+          const text = await adapters.voice.transcribe(Buffer.from(p.audioBase64, "base64"), p.format ?? "wav");
+          return ok(res, rpcId, { text });
+        }
         case "voice.hotwords.update":
-        case "vision.describe":
-          return fail(res, rpcId, ERROR_CODES.capUnsupported, "not implemented yet");
+          return fail(res, rpcId, ERROR_CODES.capUnsupported, "hotwords plugin not installed");
+        case "vision.describe": {
+          if (!adapters?.vision) return fail(res, rpcId, ERROR_CODES.capUnsupported, "vision BYOK \u672A\u914D\u7F6E\uFF08\u5BBF\u4E3B\u672A\u8BBE\u7F6E visionProvider/\u51ED\u636E\uFF09");
+          const p = payload;
+          if (!p.imageBase64) return fail(res, rpcId, ERROR_CODES.badRequest, "imageBase64 required");
+          const text = await adapters.vision.describe(p.imageBase64, p.mime ?? "image/png");
+          return ok(res, rpcId, { text });
+        }
         default:
           return fail(res, rpcId, ERROR_CODES.methodUnknown, `unknown method: ${method}`);
       }
@@ -526,27 +560,184 @@ function createWhalemaidServer(deps) {
   return createServer(makeRouter(deps)).listen(deps.port, deps.host);
 }
 
+// src/providers/voice.ts
+function requireKey(key, provider) {
+  if (!key) throw new Error(`\u7F3A\u5C11 ${provider} \u51ED\u636E\uFF1A\u8BF7\u5728\u5BBF\u4E3B dsh-credentials \u914D\u7F6E\u5BF9\u5E94 API key`);
+  return key;
+}
+function openAiCompatible(baseUrl, model, label, resolveKey) {
+  return {
+    async transcribe(audio, format) {
+      const key = requireKey(await resolveKey(), label);
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(audio)]), `audio.${format === "pcm" ? "wav" : format}`);
+      form.append("model", model);
+      const res = await fetch(`${baseUrl}/audio/transcriptions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}` },
+        body: form
+      });
+      if (!res.ok) throw new Error(`${label} \u8F6C\u5199\u5931\u8D25: ${res.status} ${await res.text()}`);
+      const data = await res.json();
+      return data.text ?? "";
+    }
+  };
+}
+function dashscopeAdapter(model, resolveKey) {
+  return {
+    async transcribe(_audio, _format) {
+      throw new Error(`dashscope(${model}) \u5F55\u97F3\u6587\u4EF6\u8BC6\u522B\u5F85\u771F\u5B9E key \u5B9E\u6D4B\uFF08\u9700\u53EF\u8BBF\u95EE\u7684\u6587\u4EF6 URL\uFF09`);
+    }
+  };
+}
+function createVoiceAdapter(cfg, resolveKey) {
+  switch (cfg.provider) {
+    case VOICE_PROVIDERS.openai:
+      return openAiCompatible(cfg.baseUrl ?? "https://api.openai.com/v1", cfg.model ?? "whisper-1", "openai", resolveKey);
+    case VOICE_PROVIDERS.groq:
+      return openAiCompatible(cfg.baseUrl ?? "https://api.groq.com/openai/v1", cfg.model ?? "whisper-large-v3", "groq", resolveKey);
+    case VOICE_PROVIDERS.dashscope:
+      return dashscopeAdapter(cfg.model ?? "paraformer-v2", resolveKey);
+    case VOICE_PROVIDERS.iflytek:
+    default:
+      throw new Error(`\u8BED\u97F3\u5382\u5546\u672A\u5B9E\u73B0: ${cfg.provider}`);
+  }
+}
+
+// src/providers/vision.ts
+function requireKey2(key, provider) {
+  if (!key) throw new Error(`\u7F3A\u5C11 ${provider} \u51ED\u636E\uFF1A\u8BF7\u5728\u5BBF\u4E3B dsh-credentials \u914D\u7F6E\u5BF9\u5E94 API key`);
+  return key;
+}
+var OCR_PROMPT = "\u8BF7\u8BC6\u522B\u8FD9\u5F20\u56FE\u7247\uFF1A\u5148\u505A\u5B8C\u6574 OCR \u8F6C\u5199\uFF0C\u518D\u7528\u4E00\u4E24\u53E5\u8BDD\u63CF\u8FF0\u56FE\u7247\u5185\u5BB9\u3002\u53EA\u8F93\u51FA\u8BC6\u522B\u7ED3\u679C\uFF0C\u4E0D\u8981\u89E3\u91CA\u3002";
+function openAiCompatibleVision(baseUrl, model, label, resolveKey) {
+  return {
+    async describe(imageBase64, mime) {
+      const key = requireKey2(await resolveKey(), label);
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: OCR_PROMPT },
+                { type: "image_url", image_url: { url: `data:${mime ?? "image/png"};base64,${imageBase64}` } }
+              ]
+            }
+          ],
+          max_tokens: 1024
+        })
+      });
+      if (!res.ok) throw new Error(`${label} \u89C6\u89C9\u5931\u8D25: ${res.status} ${await res.text()}`);
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content === "string") return content;
+      const parts = Array.isArray(content) ? content.map((p) => typeof p === "object" && p !== null && "text" in p ? p.text : "").filter(Boolean) : [];
+      return parts.join("\n");
+    }
+  };
+}
+function geminiAdapter(model, resolveKey) {
+  return {
+    async describe(imageBase64, mime) {
+      const key = requireKey2(await resolveKey(), "gemini");
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: OCR_PROMPT },
+                { inline_data: { mime_type: mime ?? "image/png", data: imageBase64 } }
+              ]
+            }
+          ]
+        })
+      });
+      if (!res.ok) throw new Error(`gemini \u89C6\u89C9\u5931\u8D25: ${res.status} ${await res.text()}`);
+      const data = await res.json();
+      return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("\n");
+    }
+  };
+}
+function createVisionAdapter(cfg, resolveKey) {
+  switch (cfg.provider) {
+    case VISION_PROVIDERS.deepseekOcr:
+      return openAiCompatibleVision(cfg.baseUrl ?? "https://api.deepseek.com/v1", cfg.model ?? "deepseek-ocr", "deepseek-ocr", resolveKey);
+    case VISION_PROVIDERS.qwenVl:
+      return openAiCompatibleVision(cfg.baseUrl ?? "https://dashscope.aliyuncs.com/compatible-mode/v1", cfg.model ?? "qwen-vl-max", "qwen-vl", resolveKey);
+    case VISION_PROVIDERS.openai:
+      return openAiCompatibleVision(cfg.baseUrl ?? "https://api.openai.com/v1", cfg.model ?? "gpt-5.6", "openai", resolveKey);
+    case VISION_PROVIDERS.grok:
+      return openAiCompatibleVision(cfg.baseUrl ?? "https://api.x.ai/v1", cfg.model ?? "grok-2-vision", "grok", resolveKey);
+    case VISION_PROVIDERS.gemini:
+      return geminiAdapter(cfg.model ?? "gemini-2.5-flash", resolveKey);
+    default:
+      throw new Error(`\u89C6\u89C9\u5382\u5546\u672A\u5B9E\u73B0: ${cfg.provider}`);
+  }
+}
+
 // src/config.ts
 import Schema from "@deepseek-ai/schemastery";
 var Config = Schema.object({
   host: Schema.string().default("127.0.0.1"),
   port: Schema.number().default(3180),
-  dataDir: Schema.string().default("")
+  dataDir: Schema.string().default(""),
+  voiceProvider: Schema.string().default(""),
+  voiceCredentialRef: Schema.string().default(""),
+  voiceModel: Schema.string().default(""),
+  visionProvider: Schema.string().default(""),
+  visionCredentialRef: Schema.string().default(""),
+  visionModel: Schema.string().default("")
 });
 
 // src/index.ts
 var name = "whalemaid";
-var inject = ["apiProxy"];
-var DEFAULTS = { host: "127.0.0.1", port: 3180, dataDir: "" };
+var inject = ["apiProxy", "credentials"];
+var DEFAULTS = {
+  host: "127.0.0.1",
+  port: 3180,
+  dataDir: "",
+  voiceProvider: "",
+  voiceCredentialRef: "",
+  voiceModel: "",
+  visionProvider: "",
+  visionCredentialRef: "",
+  visionModel: ""
+};
 function apply(ctx, config) {
   const resolved = { ...DEFAULTS, ...config };
   const store = new Store(resolved.dataDir);
   const verifier = new PasswordVerifier(store);
   const hub = new EventHub();
   const apiProxy = ctx.apiProxy;
-  const server = createWhalemaidServer({ store, verifier, apiProxy, hub, host: resolved.host, port: resolved.port });
+  const credentials = ctx.credentials;
+  const keyResolver = async (ref) => {
+    if (!ref) return void 0;
+    const hit = await credentials.resolve(credentialRef(ref));
+    return hit?.value;
+  };
+  const voiceCfg = resolved.voiceProvider ? { provider: resolved.voiceProvider, credentialRef: resolved.voiceCredentialRef, model: resolved.voiceModel || void 0 } : void 0;
+  const visionCfg = resolved.visionProvider ? { provider: resolved.visionProvider, credentialRef: resolved.visionCredentialRef, model: resolved.visionModel || void 0 } : void 0;
+  const adapters = {
+    voice: voiceCfg ? createVoiceAdapter(voiceCfg, () => keyResolver(voiceCfg.credentialRef ?? "")) : void 0,
+    vision: visionCfg ? createVisionAdapter(visionCfg, () => keyResolver(visionCfg.credentialRef ?? "")) : void 0
+  };
+  const caps = [
+    CAPABILITIES.session,
+    CAPABILITIES.workspaceCreate,
+    CAPABILITIES.directoryBrowse,
+    CAPABILITIES.direct,
+    ...adapters.voice ? [CAPABILITIES.voiceByok] : [],
+    ...adapters.vision ? [CAPABILITIES.visionByok] : []
+  ];
+  const server = createWhalemaidServer({ store, verifier, apiProxy, hub, adapters, caps, host: resolved.host, port: resolved.port });
   ctx.logger.info(
-    `[whalemaid] \u76D1\u542C http://${resolved.host}:${resolved.port} \uFF08\u8BBE\u5907 ID \u4E0E\u957F\u671F\u5BC6\u7801\u89C1 ${store.file}\uFF09`
+    `[whalemaid] \u76D1\u542C http://${resolved.host}:${resolved.port} \uFF08\u8BBE\u5907 ID \u4E0E\u957F\u671F\u5BC6\u7801\u89C1 ${store.file}\uFF1B\u8BED\u97F3=${voiceCfg?.provider ?? "\u672A\u542F\u7528"} \u89C6\u89C9=${visionCfg?.provider ?? "\u672A\u542F\u7528"}\uFF09`
   );
   const bridge = ctx;
   try {

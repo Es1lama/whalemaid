@@ -1,5 +1,6 @@
 // SPEC: docs/PREFLIGHT.md 独立测试承载：mock apiProxy + 真实网关/凭据/路由，不加载 dsh 运行时（避免触碰 dsh 本体）
 // 用法: DSH_HOME=<dir> node lib/standalone.js
+import { CAPABILITIES } from '@whalemaid/contract'
 import { createWhalemaidServer, type HostApiProxy } from './routes.js'
 import { Store } from './store.js'
 import { PasswordVerifier } from './verifier.js'
@@ -35,7 +36,8 @@ const port = Number(process.env.WHALEMAID_STANDALONE_PORT ?? 3180)
 const host = '127.0.0.1'
 const store = new Store(process.env.WHALEMAID_STANDALONE_DATA ?? undefined)
 const hub = new EventHub()
-const server = createWhalemaidServer({ store, verifier: new PasswordVerifier(store), apiProxy: mock, hub, host, port })
+const caps = [CAPABILITIES.session, CAPABILITIES.workspaceCreate, CAPABILITIES.directoryBrowse, CAPABILITIES.direct]
+const server = createWhalemaidServer({ store, verifier: new PasswordVerifier(store), apiProxy: mock, hub, caps, host, port })
 console.log(`[whalemaid-standalone] http://${host}:${port} （mock apiProxy；store=${store.file}）`)
 process.on('SIGINT', () => {
   hub.dispose()

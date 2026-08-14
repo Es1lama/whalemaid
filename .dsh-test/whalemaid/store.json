@@ -23,8 +23,8 @@
         ],
         "ext": true,
         "kty": "EC",
-        "x": "PjCcyHQYMA9Xkfdh0onyfuCoINAgPIQCq-hFs0tIwHQ",
-        "y": "lFxcphwhLKyFq78Y4QlvMFKLgmMScKW4bXwKGRlj4zg",
+        "x": "os_VnGLWeguckfjNTZEnkI1rThMS589KYRf8nc60Ewk",
+        "y": "ONKLrHXmHLqWh4FGpFn9MrWBjRgCQUMdyaGMlyuOl6Y",
         "crv": "P-256"
       },
       "tokenDigest": "67d5c3c93c57aea2ec3d4b498ba45ba1d9f6beb5013da3aed0a7ddee6fd225fa",
@@ -117,6 +117,13 @@
       "publicKeyJwk": {},
       "tokenDigest": "0b877103fa59c23451ec23309546c4c1120b3ddcb15dfe46af7ecf7c6e9aeac9",
       "createdAt": 1786727063081,
+      "revoked": false
+    },
+    {
+      "deviceId": "WHALE-TEST-DEVK",
+      "publicKeyJwk": {},
+      "tokenDigest": "5dfe142860d256beb9b4750bf0c99a50a682ea42d8d2b2d905a8bf323190ffcc",
+      "createdAt": 1786727868288,
       "revoked": false
     }
   ],
@@ -652,6 +659,48 @@
     },
     {
       "at": 1786727063092,
+      "deviceId": "WHALE-TEST-DEVK",
+      "method": "host.listDirectory",
+      "ok": true
+    },
+    {
+      "at": 1786727868283,
+      "deviceId": "anonymous",
+      "method": "device.handshake",
+      "ok": true
+    },
+    {
+      "at": 1786727868287,
+      "deviceId": "anonymous",
+      "method": "device.bind",
+      "ok": true
+    },
+    {
+      "at": 1786727868289,
+      "deviceId": "unknown",
+      "method": "session.list",
+      "ok": false
+    },
+    {
+      "at": 1786727868290,
+      "deviceId": "WHALE-TEST-DEVK",
+      "method": "session.list",
+      "ok": true
+    },
+    {
+      "at": 1786727868291,
+      "deviceId": "anonymous",
+      "method": "device.bind",
+      "ok": true
+    },
+    {
+      "at": 1786727868291,
+      "deviceId": "WHALE-TEST-DEVK",
+      "method": "host.listDirectory",
+      "ok": true
+    },
+    {
+      "at": 1786727868298,
       "deviceId": "WHALE-TEST-DEVK",
       "method": "host.listDirectory",
       "ok": true

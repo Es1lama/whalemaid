@@ -114,6 +114,13 @@ export interface RouterDeps {
   verifier: PasswordVerifier
   apiProxy: HostApiProxy
   hub: EventHub
+  /** BYOK 适配器（可选，未配置时对应 capability 不广播） */
+  adapters?: {
+    voice?: import('./providers/voice.js').VoiceAdapter
+    vision?: import('./providers/vision.js').VisionAdapter
+  }
+  /** 握手广播的能力位（由宿主装配决定） */
+  caps: string[]
 }
 
 /** 挑战-应答验签（TM-004）：ECDSA P-256，WebCrypto IEEE P1363 裸签名 */
@@ -143,7 +150,7 @@ async function passThrough(res: ServerResponse, rpcId: string, run: () => Promis
 }
 
 export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: ServerResponse) => void {
-  const { store, verifier, apiProxy, hub } = deps
+  const { store, verifier, apiProxy, hub, adapters, caps } = deps
 
   return async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -194,10 +201,7 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
             return fail(res, rpcId, ERROR_CODES.badRequest, 'invalid deviceId or key')
           }
           const nonce = store.addNonce(p.deviceId, p.publicKeyJwk)
-          return ok(res, rpcId, {
-            nonce,
-            caps: [CAPABILITIES.session, CAPABILITIES.workspaceCreate, CAPABILITIES.directoryBrowse, CAPABILITIES.direct],
-          })
+          return ok(res, rpcId, { nonce, caps })
         }
         case 'device.bind': {
           const p = payload as { deviceId?: string; password?: string; nonce?: string; nonceSignature?: string }
@@ -292,11 +296,23 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
           return passThrough(res, rpcId, () =>
             apiProxy.host.createDirectory({ rpcId, payload: payload as { path: string; name: string } }),
           )
-        case 'voice.transcribe':
+        case 'voice.transcribe': {
+          if (!adapters?.voice) return fail(res, rpcId, ERROR_CODES.capUnsupported, 'voice BYOK 未配置（宿主未设置 voiceProvider/凭据）')
+          const p = payload as { audioBase64?: string; format?: string }
+          if (!p.audioBase64) return fail(res, rpcId, ERROR_CODES.badRequest, 'audioBase64 required')
+          const text = await adapters.voice.transcribe(Buffer.from(p.audioBase64, 'base64'), p.format ?? 'wav')
+          return ok(res, rpcId, { text })
+        }
         case 'voice.hotwords.update':
-        case 'vision.describe':
-          // TODO(REQ-020/021/022): V1 实现（BYOK 宿主代理调用）
-          return fail(res, rpcId, ERROR_CODES.capUnsupported, 'not implemented yet')
+          // 热词更新由独立热词插件处理（ADR-010）；本插件不提供
+          return fail(res, rpcId, ERROR_CODES.capUnsupported, 'hotwords plugin not installed')
+        case 'vision.describe': {
+          if (!adapters?.vision) return fail(res, rpcId, ERROR_CODES.capUnsupported, 'vision BYOK 未配置（宿主未设置 visionProvider/凭据）')
+          const p = payload as { imageBase64?: string; mime?: string }
+          if (!p.imageBase64) return fail(res, rpcId, ERROR_CODES.badRequest, 'imageBase64 required')
+          const text = await adapters.vision.describe(p.imageBase64, p.mime ?? 'image/png')
+          return ok(res, rpcId, { text })
+        }
         default:
           return fail(res, rpcId, ERROR_CODES.methodUnknown, `unknown method: ${method}`)
       }

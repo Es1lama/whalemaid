@@ -99,6 +99,14 @@ export class WhaleClient {
     return this.call('workspace.create', payload)
   }
 
+  voiceTranscribe(payload: { audioBase64: string; format: string }): Promise<{ text: string }> {
+    return this.call('voice.transcribe', payload)
+  }
+
+  visionDescribe(payload: { imageBase64: string; mime?: string }): Promise<{ text: string }> {
+    return this.call('vision.describe', payload)
+  }
+
   /** SSE 事件流；不支持时调用方降级轮询（PROTO-001） */
   events(onEvent: (frame: ServerEventFrame) => void, onDisconnect: () => void): () => void {
     const es = new EventSource(`${this.base}/api/v1/events`)
