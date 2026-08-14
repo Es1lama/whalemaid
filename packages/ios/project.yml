@@ -1,6 +1,7 @@
 name: Whalemaid
 options:
   bundleIdPrefix: dev.whalemaid
+  xcodeVersion: "15.4"
   deploymentTarget:
     iOS: "16.0"
 targets:
