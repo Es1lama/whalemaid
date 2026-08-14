@@ -303,8 +303,9 @@ struct ChatView: View {
       load()
       Task {
         await client.events(onEvent: { frame in
+          // 在 @Sendable 上下文先提取 Sendable 值，再回主线程改状态
+          let status = (frame["payload"] as? [String: Any])?["status"] as? String
           Task { @MainActor in
-            let status = (frame["payload"] as? [String: Any])?["status"] as? String
             if status == "running" { running = true }
             if status == "done" { running = false; load() }
           }
