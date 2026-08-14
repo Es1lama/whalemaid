@@ -97,7 +97,7 @@ struct LoginView: View {
             model.client = c
             model.route = .home
           } catch {
-            error = error.localizedDescription
+            errorMessage = error.localizedDescription
             busy = false
           }
         }
