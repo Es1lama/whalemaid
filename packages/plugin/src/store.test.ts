@@ -36,7 +36,8 @@ describe('Store', () => {
 
   it('nonce 一次性（TM-004）', () => {
     const store = testStore()
-    const nonce = store.addNonce('WHALE-AAAA-BBBB')
+    const jwk = { kty: 'EC', crv: 'P-256' } as JsonWebKey
+    const nonce = store.addNonce('WHALE-AAAA-BBBB', jwk)
     expect(store.takeNonce(nonce)?.deviceId).toBe('WHALE-AAAA-BBBB')
     expect(store.takeNonce(nonce)).toBeNull()
   })

@@ -23,7 +23,7 @@ export interface TempToken {
 
 export interface StoreState {
   longPassword: string
-  pendingNonces: Record<string, { deviceId: string; expiresAt: number }>
+  pendingNonces: Record<string, { deviceId: string; publicKeyJwk: JsonWebKey; expiresAt: number }>
   devices: AuthorizedDevice[]
   tempTokens: TempToken[]
   audit: Array<{ at: number; deviceId: string; method: string; ok: boolean }>
@@ -38,7 +38,8 @@ export class Store {
   private path: string
 
   constructor(dataDir?: string) {
-    const base = dataDir || join(homedir(), '.dsh', 'whalemaid')
+    // 默认随 DSH_HOME 走（profile 隔离），无 DSH_HOME 时退回 ~/.dsh/whalemaid
+    const base = dataDir || join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'whalemaid')
     this.path = join(base, 'store.json')
     mkdirSync(base, { recursive: true })
     this.state = existsSync(this.path)
@@ -50,6 +51,7 @@ export class Store {
           tempTokens: [],
           audit: [],
         }
+    this.persist() // 初始状态（含生成的长期密码）立即落盘
   }
 
   /** 长期密码生成在构造时完成；插件设置页可触发重新生成（重生成=全量吊销，REQ-002） */
@@ -77,14 +79,15 @@ export class Store {
     return this.state.longPassword
   }
 
-  addNonce(deviceId: string, ttlMs = 60_000): string {
+  /** 握手时登记：nonce 绑定设备与公钥（绑定流程验签用，TM-004） */
+  addNonce(deviceId: string, publicKeyJwk: JsonWebKey, ttlMs = 60_000): string {
     const nonce = randomBytes(16).toString('base64url')
-    this.state.pendingNonces[nonce] = { deviceId, expiresAt: Date.now() + ttlMs }
+    this.state.pendingNonces[nonce] = { deviceId, publicKeyJwk, expiresAt: Date.now() + ttlMs }
     this.persist()
     return nonce
   }
 
-  takeNonce(nonce: string): { deviceId: string } | null {
+  takeNonce(nonce: string): { deviceId: string; publicKeyJwk: JsonWebKey } | null {
     const entry = this.state.pendingNonces[nonce]
     if (!entry || entry.expiresAt < Date.now()) return null
     delete this.state.pendingNonces[nonce] // 一次性（TM-004）

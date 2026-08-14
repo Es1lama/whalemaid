@@ -14,8 +14,9 @@ if (!ID_PATTERN.test(DEVICE_ID)) {
   process.exit(1)
 }
 
-// 长期密码：测试专用，读宿主 store.json（生产由插件设置页展示）
-const store = JSON.parse(readFileSync(join(homedir(), '.dsh', 'whalemaid', 'store.json'), 'utf8'))
+// 长期密码：测试专用，读宿主 store.json（生产由插件设置页展示）；store 随 DSH_HOME 走
+const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+const store = JSON.parse(readFileSync(join(dshHome, 'whalemaid', 'store.json'), 'utf8'))
 const PASSWORD = process.env.WHALEMAID_PASSWORD ?? store.longPassword
 
 async function call(method, payload, token) {

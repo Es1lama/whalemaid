@@ -1,0 +1,13 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: false
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@whalemaid/plugin':
+        specifier: link:/Users/zz/Desktop/ws/Code/programs/dpsk-far/packages/plugin
+        version: link:../../../packages/plugin
