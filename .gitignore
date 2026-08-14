@@ -9,3 +9,7 @@ dist/
 packages/relay/target/
 packages/relay/data/
 .relay-test-data/
+packages/android/.gradle/
+packages/android/build/
+packages/android/app/build/
+packages/android/local.properties
