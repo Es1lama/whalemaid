@@ -99,7 +99,7 @@ public final class ProtocolClient: @unchecked Sendable {
   public func events(onEvent: @escaping @Sendable ([String: Any]) -> Void, onDisconnect: @escaping @Sendable (String?) -> Void) -> Task<Void, Never> {
     let base = self.base
     let token = self.token
-    Task.detached {
+    return Task.detached {
       var req = URLRequest(url: URL(string: "\(base)/api/v1/events")!)
       if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
       do {
