@@ -43,12 +43,20 @@ export class WhaleClient {
     return this.call('device.bind', payload)
   }
 
+  bindTemporary(payload: { deviceId: string; password: string }): Promise<{ deviceToken: string; expiresAt: number }> {
+    return this.call('device.bindTemporary', payload)
+  }
+
   sessionList(payload: object = {}): Promise<unknown> {
     return this.call('session.list', payload)
   }
 
   sessionCreate(payload: object = {}): Promise<unknown> {
     return this.call('session.create', payload)
+  }
+
+  sessionHistory(payload: { sessionId: string; maxMessages?: number }): Promise<unknown> {
+    return this.call('session.history', payload)
   }
 
   prompt(payload: { sessionId: string; text: string; visionNote?: string }): Promise<unknown> {
@@ -59,8 +67,32 @@ export class WhaleClient {
     return this.call('session.stop', payload)
   }
 
+  models(payload: { sessionId: string }): Promise<unknown> {
+    return this.call('session.models', payload)
+  }
+
+  selectModel(payload: { sessionId: string; provider: string; model: string; reasoningEffort?: string }): Promise<unknown> {
+    return this.call('session.selectModel', payload)
+  }
+
+  permissionGet(payload: { sessionId: string }): Promise<unknown> {
+    return this.call('permission.get', payload)
+  }
+
+  permissionSet(payload: { sessionId: string; value: string }): Promise<unknown> {
+    return this.call('permission.set', payload)
+  }
+
+  workspaceList(): Promise<unknown> {
+    return this.call('workspace.list', {})
+  }
+
   listDirectory(payload: { path?: string } = {}): Promise<unknown> {
     return this.call('host.listDirectory', payload)
+  }
+
+  createDirectory(payload: { path: string; name: string }): Promise<unknown> {
+    return this.call('host.createDirectory', payload)
   }
 
   workspaceCreate(payload: { path: string }): Promise<unknown> {

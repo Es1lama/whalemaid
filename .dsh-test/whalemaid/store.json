@@ -23,8 +23,8 @@
         ],
         "ext": true,
         "kty": "EC",
-        "x": "4y2edUmiD4be7Rc9nfVPFKMDeqK5EN_I5Xj-q03KIjA",
-        "y": "jDlloqLiZFCqwRmETlZJdxr2DpKNiVzSAaRhTDspVA0",
+        "x": "AEBmnhlrriMDwXArut4GaXTGBt4KokGu6ipqPx8K1Uw",
+        "y": "7U9YZF5tw0SemLgv_uWqGHZVZkmjUxcp2MEoavN7REQ",
         "crv": "P-256"
       },
       "tokenDigest": "67d5c3c93c57aea2ec3d4b498ba45ba1d9f6beb5013da3aed0a7ddee6fd225fa",
@@ -103,6 +103,13 @@
       "publicKeyJwk": {},
       "tokenDigest": "036da740b4ff15b9208718e477fc5106c2cbdeef009a5bab0a96b636f9892aad",
       "createdAt": 1786726617840,
+      "revoked": false
+    },
+    {
+      "deviceId": "WHALE-TEST-DEVK",
+      "publicKeyJwk": {},
+      "tokenDigest": "1eba72f1c85a1745cfba56d88b7a0af1404fd42ad876c08498caa2ff24126bb0",
+      "createdAt": 1786726889062,
       "revoked": false
     }
   ],
@@ -556,6 +563,48 @@
       "at": 1786726617852,
       "deviceId": "n/a",
       "method": "workspace.create",
+      "ok": true
+    },
+    {
+      "at": 1786726889058,
+      "deviceId": "n/a",
+      "method": "device.handshake",
+      "ok": true
+    },
+    {
+      "at": 1786726889062,
+      "deviceId": "n/a",
+      "method": "device.bind",
+      "ok": true
+    },
+    {
+      "at": 1786726889064,
+      "deviceId": "unknown",
+      "method": "session.list",
+      "ok": false
+    },
+    {
+      "at": 1786726889065,
+      "deviceId": "n/a",
+      "method": "session.list",
+      "ok": true
+    },
+    {
+      "at": 1786726889065,
+      "deviceId": "n/a",
+      "method": "device.bind",
+      "ok": true
+    },
+    {
+      "at": 1786726889066,
+      "deviceId": "n/a",
+      "method": "host.listDirectory",
+      "ok": true
+    },
+    {
+      "at": 1786726889073,
+      "deviceId": "n/a",
+      "method": "host.listDirectory",
       "ok": true
     }
   ],

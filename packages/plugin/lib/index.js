@@ -236,6 +236,9 @@ var EventHub = class {
 // src/routes.ts
 import { createServer } from "node:http";
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
+import { readFileSync as readFileSync2 } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join as join2 } from "node:path";
 
 // ../contract/src/envelope.ts
 var PROTOCOL_VERSION = 1;
@@ -272,6 +275,30 @@ var ERROR_CODES = {
 var DEVICE_ID_PATTERN = /^WHALE-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
 
 // src/routes.ts
+var MOBILE_DIST = fileURLToPath(new URL("./mobile-dist/", import.meta.url));
+var CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
+  ".json": "application/json"
+};
+function serveStatic(res, rel) {
+  const ext = rel.slice(rel.lastIndexOf("."));
+  const type = CONTENT_TYPES[ext] ?? "application/octet-stream";
+  const abs = join2(MOBILE_DIST, rel);
+  if (!abs.startsWith(MOBILE_DIST)) return false;
+  try {
+    const data = readFileSync2(abs);
+    res.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
+    res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
+}
 var PUBLIC_METHODS = /* @__PURE__ */ new Set(["device.handshake", "device.bind", "device.bindTemporary"]);
 function json(res, status, body) {
   res.writeHead(status, {
@@ -333,9 +360,9 @@ function makeRouter(deps) {
     if (path === "/healthz") return json(res, 200, { ok: true });
     if (path === "/api/v1/events") return hub.subscribe(req, res);
     if (path === "/api/v1/poll") return json(res, 200, { events: hub.replay(Number(url.searchParams.get("since") ?? 0)) });
-    if (path === "/m") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end('<!doctype html><meta charset="utf-8"><title>WhaleMaid</title><h1>WhaleMaid \u79FB\u52A8\u7AEF\u6784\u5EFA\u4E2D</h1>');
+    if (path === "/m" || path === "/m/") return serveStatic(res, "index.html") || json(res, 404, { error: "mobile dist not built" });
+    if (path.startsWith("/assets/") || path === "/manifest.webmanifest") {
+      return serveStatic(res, path.slice(1)) || json(res, 404, { error: "not found" });
     }
     if (path !== "/api/v1") return json(res, 404, { error: "not-found" });
     const method = url.searchParams.get("method") ?? "";
@@ -456,6 +483,8 @@ function makeRouter(deps) {
             () => apiProxy.sessions.prompt({ rpcId, payload: { sessionId: p.sessionId, mode: "queue", content: [{ type: "text", text: `/permission ${p.value}` }] } })
           );
         }
+        case "workspace.list":
+          return passThrough(res, rpcId, () => apiProxy.workspace.list({ rpcId, payload: {} }));
         case "workspace.create":
           return passThrough(
             res,

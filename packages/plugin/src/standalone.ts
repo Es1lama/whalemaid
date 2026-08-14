@@ -13,6 +13,7 @@ const okValue = <T,>(value: T): { rpcId: string; result: { ok: true; value: T } 
 
 const mock: HostApiProxy = {
   workspace: {
+    list: async () => okValue({ items: [] }),
     create: async () => okValue({ workspaceId: 'ws-mock', created: true }),
   },
   sessions: {

@@ -33,3 +33,14 @@ export interface WorkspaceCreateData {
   workspaceId: string
   created: boolean
 }
+
+export interface WorkspaceSummary {
+  workspaceId: string
+  title: string
+  path: string
+  sessionIds: string[]
+}
+
+export interface WorkspaceListData {
+  items: WorkspaceSummary[]
+}
