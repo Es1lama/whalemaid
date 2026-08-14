@@ -32,7 +32,7 @@
 | 3 | 三平台 spike | 结论回写 ADR | ⬜ 下一步 |
 | 4 | 协议 v1 | `docs/protocol.md`：PROTO-001.. 信封/capability/三通道/错误码 | ⬜ 依赖 3 |
 | 5 | 威胁模型 v1 | `docs/threat-model.md`：TM-001.. 对策→检查点 | ⬜ 依赖 4 |
-| 6 | 仓库骨架 | monorepo + LICENSE（AGPL-3.0）+ SECURITY.md + 模板 + CI | ⬜ 依赖 1、2 |
+| 6 | 仓库骨架 | monorepo（**api-contract 独立包**：统一 API 契约，多端共用）+ LICENSE（AGPL-3.0）+ SECURITY.md + 模板 + CI | ⬜ 依赖 1、2 |
 
 ### Spike 清单（先验证再架构，防返工）
 
