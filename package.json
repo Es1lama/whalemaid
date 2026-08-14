@@ -1,0 +1,11 @@
+{
+  "name": "whalemaid",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "license": "AGPL-3.0",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
+  }
+}

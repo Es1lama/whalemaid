@@ -1,7 +1,7 @@
 # WhaleMaid（鲸娘）· 产品设计稿
 
 > 唯一现行版。旧版只存于 git 历史，本文档只保留当前有效语义（文档治理六原则见 PREFLIGHT §2）。
-> 仓库 github.com/esilama/whalemaid（待创建）。开源协议 **AGPL-3.0（已确认）**。架构母本 Happier。
+> 公开仓 github.com/Es1lama/whalemaid（AGPL-3.0）；闭源仓 Es1lama/whalemaid-console（私有，控制管理系统）。架构母本 Happier。
 
 ---
 
@@ -87,4 +87,4 @@ M1：中继 MVP + 被控插件 + 移动端 + IP 直连。M2：完整 MVP → v0.
 
 ## §12 开放问题
 
-Q1 试用月数（暂定 2 个月）；Q2 吉祥物草图（M2 前，不阻塞）；Q3 短信供应商（Phase B 再定）；Q4 仓库创建（esilama/whalemaid，待用户操作）。
+Q1 试用月数（暂定 2 个月）；Q2 吉祥物草图（M2 前，不阻塞）；Q3 短信供应商（Phase B 再定）。

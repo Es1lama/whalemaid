@@ -27,7 +27,7 @@
 | ADR-020 | 引用顺序 | 四步法：A 档源码优先 → B 档公开文档（不能上位替代实现细节）→ RFC/标准 → C 档 AGPL 仅洁净室最后手段并留证 | DESIGN §2 |
 | ADR-021 | 协议预留 | 版本化信封 + capability + 认证接口抽象 + 三通道先行；代码无 billing 字样、无死桩 | DESIGN §7 |
 | ADR-022 | 文档映射 | ADR/REQ/PROTO/TM 编号体系，文档↔代码唯一映射，先文档后代码 | PREFLIGHT |
-| ADR-023 | 仓库归属 | github.com/esilama/whalemaid（个人账号）；git 已 init（身份 esilama） | DESIGN §0 |
+| ADR-023 | 仓库归属 | 双仓：公开 github.com/Es1lama/whalemaid（AGPL-3.0）+ 私有 Es1lama/whalemaid-console（闭源控制台）；gh 已建仓推送 | DESIGN §0 |
 | ADR-024 | 会话托管 | 手机操作的是电脑上 DSH 的**原生会话**（区别于 Happy 自有会话） | REQ-005 |
 | ADR-025 | 三通道 | 会话 E2E 零知识；语音/视觉为知情同意通道（BYOK 或 Level 2） | DESIGN §6 |
 | ADR-026 | 工程哲学 | 复用决策程序（造轮子/复用边界/传承盈利三理论合一），每个复用 vs 自写决策过流程并记 ADR | DESIGN §2 |
@@ -36,6 +36,7 @@
 | ADR-029 | 多端策略 | Web 先行；Android/iOS/鸿蒙后置；**统一 API 契约**（客户端只依赖公开 API）保证多端影响小；宿主插件三平台（macOS/Ubuntu/Windows） | DESIGN §3 |
 | ADR-030 | 闭源定位 | 闭源 = **完整控制管理系统**（账号/计费/控制台/风控/工单/运营后台/Level 2），盈利性代码全部收敛于此 | DESIGN §8 |
 | ADR-031 | S0/S1 结论 | 插件形态/宿主 API/browse seam/凭据/web 路由全部静态确认可行；**直连改走插件自建 listener（选项 B）**——rc.6 CLI 拒绝 `--host 0.0.0.0`，自建 server + `toFetchHandler(ctx.apiProxy)` 不依赖官方绑定 | research/spike-S0-S1 |
+| ADR-036 | 双仓分离 | 开源（AGPL）与闭源控制台分仓；`packages/contract` 为边界（统一 API 契约，双仓共用）；社区代码进闭源仓须 CLA（ADR-027） | DESIGN §0 |
 | ADR-032 | S2 结论 | rathole sidecar 定案：控制面写配置+托管子进程+热重载增删；每设备一 service+token；吊销=移除条目热重载；noise 加密+心跳 | research/spike-S2-S5 |
 | ADR-033 | S3 结论 | 设备密钥 = PWA WebCrypto ECDSA P-256 不可导出，IndexedDB 持久化；挑战-应答握手；重装即重新配对 | research/spike-S2-S5 |
 | ADR-034 | S4 结论 | 热词库走官方定制热词 HTTP API（vocabulary 增删改查 + 实时会话带 vocabulary_id）；BYOK 同机制 | research/spike-S2-S5 |

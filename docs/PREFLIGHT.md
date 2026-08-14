@@ -1,7 +1,7 @@
 # WhaleMaid · 启动前清单（Preflight）
 
 > 阻塞项已全部敲定，M0 已启动。本文件是 M0 的路线图与纪律声明（唯一现行版，旧版只存 git 历史）。
-> 环境注记：本机访问 GitHub 需走规则代理 `http://127.0.0.1:7890`（git 配置 `http.proxy` 同理）；git 已 init，本地提交身份 esilama。
+> 环境注记：本机访问 GitHub 走规则代理 `http://127.0.0.1:7890`；gh 已登录账号 **Es1lama**；双仓已建并推送（公开 whalemaid / 私有 whalemaid-console）。
 
 ---
 
@@ -52,6 +52,6 @@ ADR-001..（决策）/ REQ-001..（需求+验收+代码路径）/ PROTO-001..（
 
 ## 5. 用户待办
 
-1. 创建仓库 github.com/esilama/whalemaid（空仓库即可，骨架任务 6 会提交）。
+1. ~~创建仓库~~ ✅ 已由 gh 建仓并推送（Es1lama/whalemaid 公开 + whalemaid-console 私有）。
 2. 确认试用月数（暂定 2 个月）。
 3. 吉祥物草图（M2 前有即可，不阻塞）。

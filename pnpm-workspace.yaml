@@ -1,0 +1,4 @@
+packages:
+  - packages/contract
+  - packages/plugin
+  - packages/mobile
