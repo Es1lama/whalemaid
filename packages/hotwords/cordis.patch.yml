@@ -1,0 +1,4 @@
+# SPEC: docs/adr/INDEX.md#ADR-010 独立附加插件，不默认安装
+- insert:
+    - id: whalemaid-hotwords
+      name: '@whalemaid/hotwords'

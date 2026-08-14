@@ -1,0 +1,38 @@
+{
+  "name": "@whalemaid/hotwords",
+  "version": "0.1.0",
+  "description": "WhaleMaid 热词附加插件（独立安装、不默认）：宿主本地抽取专业词 → 只上传词表（ADR-010/REQ-021）",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "src/index.ts",
+  "license": "AGPL-3.0",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=lib/index.js --external:@deepseek-ai/* --external:node:*"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-credentials": "0.1.0-rc.6",
+    "@whalemaid/contract": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  },
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ]
+}

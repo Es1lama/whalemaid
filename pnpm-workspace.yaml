@@ -1,6 +1,7 @@
 packages:
   - packages/contract
   - packages/plugin
+  - packages/hotwords
   - packages/mobile
 
 allowBuilds:
