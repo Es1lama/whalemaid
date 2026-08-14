@@ -40,10 +40,10 @@
 |---|---|---|
 | S0 | **IP 直连模式**：DSH web 绑定 0.0.0.0 后，手机浏览器直连 `/m` 路由实测 | ✅ 静态：rc.6 CLI 拒绝 `--host 0.0.0.0` → 改**插件自建 listener（选项 B）**；实机待 M1 | 
 | S1 | DSH 插件注册 web 路由 + 调宿主 API（browse seam、`workspace.create`、`dsh-credentials`） | ✅ 静态：全部接口确认（见 research/spike-S0-S1.md）；实机待 M1 |
-| S2 | rathole（Rust）服务端/客户端实测：noise 握手、授权语义、sidecar 管理可行性 | 决定中继接法（设备身份如何挂） |
-| S3 | PWA WebCrypto 密钥对：生成/持久化/不可导出 | 决定设备凭据实现 |
-| S4 | DashScope 定制热词 API：鉴权 + 批量增删 | 决定热词接口形状 |
-| S5 | DeepSeek-OCR / 通义 VL 调用 | 决定视觉适配器接口 |
+| S2 | rathole（Rust）服务端/客户端实测：noise 握手、授权语义、sidecar 管理可行性 | ✅ sidecar 定案（热重载增删设备条目、吊销=移除条目）；ADR-032 |
+| S3 | PWA WebCrypto 密钥对：生成/持久化/不可导出 | ✅ 方案确认（ECDSA P-256 + IndexedDB + 挑战应答）；实机 M1；ADR-033 |
+| S4 | DashScope 定制热词 API：鉴权 + 批量增删 | ✅ 文档级确认（vocabulary HTTP API + vocabulary_id）；真实 key 实测留 Phase B；ADR-034 |
+| S5 | DeepSeek-OCR / 通义 VL 调用 | ✅ 确认（deepseek-ocr guides 存在；qwen-vl-max/plus）；ADR-035 |
 
 ## 4. 文档 ↔ 代码唯一映射机制
 

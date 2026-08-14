@@ -36,6 +36,10 @@
 | ADR-029 | 多端策略 | Web 先行；Android/iOS/鸿蒙后置；**统一 API 契约**（客户端只依赖公开 API）保证多端影响小；宿主插件三平台（macOS/Ubuntu/Windows） | DESIGN §3 |
 | ADR-030 | 闭源定位 | 闭源 = **完整控制管理系统**（账号/计费/控制台/风控/工单/运营后台/Level 2），盈利性代码全部收敛于此 | DESIGN §8 |
 | ADR-031 | S0/S1 结论 | 插件形态/宿主 API/browse seam/凭据/web 路由全部静态确认可行；**直连改走插件自建 listener（选项 B）**——rc.6 CLI 拒绝 `--host 0.0.0.0`，自建 server + `toFetchHandler(ctx.apiProxy)` 不依赖官方绑定 | research/spike-S0-S1 |
+| ADR-032 | S2 结论 | rathole sidecar 定案：控制面写配置+托管子进程+热重载增删；每设备一 service+token；吊销=移除条目热重载；noise 加密+心跳 | research/spike-S2-S5 |
+| ADR-033 | S3 结论 | 设备密钥 = PWA WebCrypto ECDSA P-256 不可导出，IndexedDB 持久化；挑战-应答握手；重装即重新配对 | research/spike-S2-S5 |
+| ADR-034 | S4 结论 | 热词库走官方定制热词 HTTP API（vocabulary 增删改查 + 实时会话带 vocabulary_id）；BYOK 同机制 | research/spike-S2-S5 |
+| ADR-035 | S5 结论 | 视觉 BYOK 注册表：deepseek-ocr（官方 guides 存在）+ qwen-vl-max/plus；海外可选 | research/spike-S2-S5 |
 
 ## 升级规则
 
