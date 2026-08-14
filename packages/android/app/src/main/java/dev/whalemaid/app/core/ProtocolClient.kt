@@ -13,7 +13,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.BufferedReader
 
-class ProtocolClient(private val base: String) {
+class ProtocolClient(val base: String) {
   var token: String? = null
   private val client = OkHttpClient.Builder().build()
   private val json = Json { ignoreUnknownKeys = true }
