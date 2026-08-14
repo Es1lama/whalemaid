@@ -3,7 +3,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto'
 import {
-  AUTH_HEADER_PREFIX,
   CAPABILITIES,
   DEVICE_ID_PATTERN,
   ERROR_CODES,

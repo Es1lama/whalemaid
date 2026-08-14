@@ -65,6 +65,10 @@ export class Store {
     return this.state.longPassword
   }
 
+  get file(): string {
+    return this.file
+  }
+
   rotatePassword(): string {
     this.state.longPassword = this.newPassword()
     this.state.devices = [] // 改密=吊销全部设备（REQ-002）

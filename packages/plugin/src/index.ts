@@ -22,7 +22,7 @@ export function apply(ctx: Context) {
   const server = createWhalemaidServer({ store, verifier, apiProxy, hub, host: config.host, port: config.port })
 
   ctx.logger.info(
-    `[whalemaid] 监听 http://${config.host}:${config.port} （设备 ID 与长期密码见 ${store['file' as never] ?? '~/.dsh/whalemaid/store.json'}）`,
+    `[whalemaid] 监听 http://${config.host}:${config.port} （设备 ID 与长期密码见 ${store.file}）`,
   )
 
   // 宿主事件 → SSE 桥（TODO: 订阅 DSH host/* 事件映射到 PROTO-004 帧类型，M1 测试 loop 对齐）

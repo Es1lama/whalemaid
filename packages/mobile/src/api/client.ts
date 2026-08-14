@@ -13,6 +13,10 @@ export class WhaleClient {
 
   constructor(private base: string) {}
 
+  get endpoint(): string {
+    return this.base
+  }
+
   setToken(token: string): void {
     this.token = token
   }

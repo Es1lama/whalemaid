@@ -36,7 +36,7 @@ function App() {
       const sig = await signNonce(pair, nonce)
       const { deviceToken } = await c.bind({ deviceId, nonce, password, nonceSignature: sig })
       c.setToken(deviceToken)
-      localStorage.setItem('whalemaid.base', c['base'])
+      localStorage.setItem('whalemaid.base', c.endpoint)
       localStorage.setItem('whalemaid.deviceId', deviceId)
       localStorage.setItem('whalemaid.token', deviceToken)
       setClient(c)
