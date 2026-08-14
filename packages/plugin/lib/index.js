@@ -26,8 +26,10 @@ var Store = class {
       pendingNonces: {},
       devices: [],
       tempTokens: [],
+      tempPasswords: [],
       audit: []
     };
+    this.state.tempPasswords ??= [];
     this.persist();
   }
   /** 长期密码生成在构造时完成；插件设置页可触发重新生成（重生成=全量吊销，REQ-002） */
@@ -88,6 +90,36 @@ var Store = class {
     const d = digest(token);
     return this.state.devices.find((x) => x.tokenDigest === d && !x.revoked);
   }
+  /** 生成一次性/限时临时密码（REQ-003），默认 10 分钟 */
+  issueTemporaryPassword(ttlMs = 10 * 6e4) {
+    const password = generatePassword();
+    this.state.tempPasswords = this.state.tempPasswords.filter((p) => p.expiresAt > Date.now());
+    this.state.tempPasswords.push({ password, expiresAt: Date.now() + ttlMs });
+    this.persist();
+    return password;
+  }
+  /** 消费临时密码：一次性，用过即焚（REQ-003） */
+  consumeTemporaryPassword(password) {
+    const idx = this.state.tempPasswords.findIndex((p) => p.password === password && p.expiresAt > Date.now());
+    if (idx < 0) return false;
+    this.state.tempPasswords.splice(idx, 1);
+    this.persist();
+    return true;
+  }
+  /** 签发短 TTL 临时 token（临时密码绑定所得），默认 12 小时 */
+  issueTemporaryToken(deviceId, ttlMs = 12 * 36e5) {
+    const token = randomBytes2(32).toString("base64url");
+    this.state.tempTokens = this.state.tempTokens.filter((t) => t.expiresAt > Date.now() && !t.used);
+    this.state.tempTokens.push({ digest: digest(token), deviceId, expiresAt: Date.now() + ttlMs, used: false });
+    this.persist();
+    return token;
+  }
+  /** 查找临时 token（验证一次有效，不消费） */
+  findTemporaryToken(token) {
+    const d = digest(token);
+    const t = this.state.tempTokens.find((x) => x.digest === d && !x.used && x.expiresAt > Date.now());
+    return t ? { deviceId: t.deviceId } : void 0;
+  }
   revokeDevice(deviceId) {
     const dev = this.state.devices.find((d) => d.deviceId === deviceId);
     if (dev) {
@@ -130,10 +162,20 @@ var PasswordVerifier = class {
     this.store = store;
   }
   fails = new FailCounter();
-  /** 绑定流程专用：验密码（长期密码；临时密码 TODO REQ-003），成功返回 true */
+  /** 绑定流程专用：验长期密码，成功返回 true */
   checkPassword(password, clientKey = "") {
     if (!this.fails.allowed(clientKey)) return false;
     if (password === this.store.longPassword) {
+      this.fails.recordSuccess(clientKey);
+      return true;
+    }
+    this.fails.recordFail(clientKey);
+    return false;
+  }
+  /** 绑定流程专用：消费一次性/限时临时密码（REQ-003） */
+  checkTemporaryPassword(password, clientKey = "") {
+    if (!this.fails.allowed(clientKey)) return false;
+    if (this.store.consumeTemporaryPassword(password)) {
       this.fails.recordSuccess(clientKey);
       return true;
     }
@@ -145,7 +187,9 @@ var PasswordVerifier = class {
     if (!header.startsWith("Bearer ")) return null;
     const token = header.slice("Bearer ".length);
     const device = this.store.findDeviceByToken(token);
-    return device ? device.deviceId : null;
+    if (device) return device.deviceId;
+    const temp = this.store.findTemporaryToken(token);
+    return temp ? temp.deviceId : null;
   }
 };
 
@@ -348,8 +392,15 @@ function makeRouter(deps) {
           store.bindPublicKey(p.deviceId, taken.publicKeyJwk);
           return ok(res, rpcId, { deviceToken: token });
         }
-        case "device.bindTemporary":
-          return fail(res, rpcId, ERROR_CODES.capUnsupported, "temporary password not implemented yet");
+        case "device.bindTemporary": {
+          const p = payload;
+          if (!p.deviceId || !p.password) return fail(res, rpcId, ERROR_CODES.badRequest, "missing fields");
+          if (!verifier.checkTemporaryPassword(p.password)) {
+            return fail(res, rpcId, ERROR_CODES.authFailed, "bad or expired temporary password");
+          }
+          const token = store.issueTemporaryToken(p.deviceId);
+          return ok(res, rpcId, { deviceToken: token, expiresAt: Date.now() + 12 * 36e5 });
+        }
         case "session.list":
           return passThrough(res, rpcId, () => apiProxy.sessions.list({ rpcId, payload }));
         case "session.history":
@@ -388,9 +439,23 @@ function makeRouter(deps) {
             rpcId,
             () => apiProxy.sessions.selectModel({ rpcId, payload })
           );
-        case "permission.get":
-        case "permission.set":
-          return fail(res, rpcId, ERROR_CODES.capUnsupported, "permission passthrough pending");
+        case "permission.get": {
+          const p = payload;
+          if (!p.sessionId) return fail(res, rpcId, ERROR_CODES.badRequest, "sessionId required");
+          const r = await apiProxy.sessions.history({ rpcId, payload: { sessionId: p.sessionId, maxMessages: 1 } });
+          if (!r.result.ok) return fail(res, rpcId, r.result.error.code, r.result.error.message);
+          const projections = r.result.value?.projections;
+          return ok(res, rpcId, { permissions: projections?.["permissions"] ?? null });
+        }
+        case "permission.set": {
+          const p = payload;
+          if (!p.sessionId || typeof p.value !== "string") return fail(res, rpcId, ERROR_CODES.badRequest, "sessionId/value required");
+          return passThrough(
+            res,
+            rpcId,
+            () => apiProxy.sessions.prompt({ rpcId, payload: { sessionId: p.sessionId, mode: "queue", content: [{ type: "text", text: `/permission ${p.value}` }] } })
+          );
+        }
         case "workspace.create":
           return passThrough(
             res,
@@ -453,6 +518,18 @@ function apply(ctx, config) {
   ctx.logger.info(
     `[whalemaid] \u76D1\u542C http://${resolved.host}:${resolved.port} \uFF08\u8BBE\u5907 ID \u4E0E\u957F\u671F\u5BC6\u7801\u89C1 ${store.file}\uFF09`
   );
+  const bridge = ctx;
+  try {
+    bridge.on("host/session-status", (sessionId, status) => {
+      const s = typeof status === "object" && status !== null ? status : void 0;
+      hub.push("turn-status", {
+        sessionId: String(sessionId),
+        status: s?.running ? "running" : "done"
+      });
+    });
+  } catch {
+    ctx.logger.warn("[whalemaid] SSE \u4E8B\u4EF6\u6865\u6682\u4E0D\u53EF\u7528\uFF08\u4E8B\u4EF6\u540D\u672A\u5728\u5BBF\u4E3B\u8F6C\u53D1\u5217\u8868\u4E2D\uFF09");
+  }
   ctx.effect(() => () => {
     hub.dispose();
     server.close();

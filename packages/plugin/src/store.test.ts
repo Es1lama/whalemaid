@@ -45,4 +45,19 @@ describe('Store', () => {
   it('digest 稳定', () => {
     expect(digest('x')).toBe(digest('x'))
   })
+
+  it('临时密码一次性且过期（REQ-003）', () => {
+    const store = testStore()
+    const pw = store.issueTemporaryPassword()
+    expect(store.consumeTemporaryPassword(pw)).toBe(true)
+    expect(store.consumeTemporaryPassword(pw)).toBe(false) // 用过即焚
+    const pw2 = store.issueTemporaryPassword(0)
+    expect(store.consumeTemporaryPassword(pw2)).toBe(false) // 立即过期
+  })
+
+  it('临时 token 短 TTL 可验证（REQ-003）', () => {
+    const store = testStore()
+    const token = store.issueTemporaryToken('WHALE-AAAA-BBBB', 1000)
+    expect(store.findTemporaryToken(token)?.deviceId).toBe('WHALE-AAAA-BBBB')
+  })
 })

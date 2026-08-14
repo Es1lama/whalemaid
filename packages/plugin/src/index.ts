@@ -29,7 +29,19 @@ export function apply(ctx: Context, config?: Config): void {
     `[whalemaid] 监听 http://${resolved.host}:${resolved.port} （设备 ID 与长期密码见 ${store.file}）`,
   )
 
-  // 宿主事件 → SSE 桥（TODO: 订阅 DSH host/* 事件映射到 PROTO-004 帧类型，M1 测试 loop 对齐）
+  // 宿主事件 → SSE 桥（PROTO-004 帧）：订阅 DSH 会话状态事件，尽力而为（事件名随 rc 变化时静默降级）
+  const bridge = (ctx as unknown as { on: (name: string, cb: (...args: unknown[]) => void) => unknown })
+  try {
+    bridge.on('host/session-status', (sessionId: unknown, status?: unknown) => {
+      const s = typeof status === 'object' && status !== null ? (status as { running?: boolean }) : undefined
+      hub.push('turn-status', {
+        sessionId: String(sessionId),
+        status: s?.running ? 'running' : 'done',
+      })
+    })
+  } catch {
+    ctx.logger.warn('[whalemaid] SSE 事件桥暂不可用（事件名未在宿主转发列表中）')
+  }
 
   ctx.effect(() => () => {
     hub.dispose()

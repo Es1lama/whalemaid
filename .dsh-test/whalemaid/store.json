@@ -23,8 +23,8 @@
         ],
         "ext": true,
         "kty": "EC",
-        "x": "8tpNP7VgXjaU20E2t5Tapk26_WL5oht4HCYsw8JcQAY",
-        "y": "bzvQX1vWM8EH997aELl7iVYENYFx16m-WLvkQIf-1lE",
+        "x": "4y2edUmiD4be7Rc9nfVPFKMDeqK5EN_I5Xj-q03KIjA",
+        "y": "jDlloqLiZFCqwRmETlZJdxr2DpKNiVzSAaRhTDspVA0",
         "crv": "P-256"
       },
       "tokenDigest": "67d5c3c93c57aea2ec3d4b498ba45ba1d9f6beb5013da3aed0a7ddee6fd225fa",
@@ -96,6 +96,13 @@
       "publicKeyJwk": {},
       "tokenDigest": "98bcdaa63698f54a6b33f85764ddb776a48fc38d2d380e5c312f659475068bea",
       "createdAt": 1786726423714,
+      "revoked": false
+    },
+    {
+      "deviceId": "WHALE-TEST-DEVK",
+      "publicKeyJwk": {},
+      "tokenDigest": "036da740b4ff15b9208718e477fc5106c2cbdeef009a5bab0a96b636f9892aad",
+      "createdAt": 1786726617840,
       "revoked": false
     }
   ],
@@ -502,6 +509,55 @@
       "deviceId": "n/a",
       "method": "host.listDirectory",
       "ok": true
+    },
+    {
+      "at": 1786726617835,
+      "deviceId": "n/a",
+      "method": "device.handshake",
+      "ok": true
+    },
+    {
+      "at": 1786726617839,
+      "deviceId": "n/a",
+      "method": "device.bind",
+      "ok": true
+    },
+    {
+      "at": 1786726617841,
+      "deviceId": "unknown",
+      "method": "session.list",
+      "ok": false
+    },
+    {
+      "at": 1786726617842,
+      "deviceId": "n/a",
+      "method": "session.list",
+      "ok": true
+    },
+    {
+      "at": 1786726617843,
+      "deviceId": "n/a",
+      "method": "device.bind",
+      "ok": true
+    },
+    {
+      "at": 1786726617844,
+      "deviceId": "n/a",
+      "method": "host.listDirectory",
+      "ok": true
+    },
+    {
+      "at": 1786726617851,
+      "deviceId": "n/a",
+      "method": "host.listDirectory",
+      "ok": true
+    },
+    {
+      "at": 1786726617852,
+      "deviceId": "n/a",
+      "method": "workspace.create",
+      "ok": true
     }
-  ]
+  ],
+  "tempPasswords": []
 }

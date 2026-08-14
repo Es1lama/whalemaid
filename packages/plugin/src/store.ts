@@ -26,6 +26,8 @@ export interface StoreState {
   pendingNonces: Record<string, { deviceId: string; publicKeyJwk: JsonWebKey; expiresAt: number }>
   devices: AuthorizedDevice[]
   tempTokens: TempToken[]
+  /** 一次性/限时临时密码（REQ-003）：宿主生成、用完即焚 */
+  tempPasswords: Array<{ password: string; expiresAt: number }>
   audit: Array<{ at: number; deviceId: string; method: string; ok: boolean }>
 }
 
@@ -49,8 +51,10 @@ export class Store {
           pendingNonces: {},
           devices: [],
           tempTokens: [],
+          tempPasswords: [],
           audit: [],
         }
+    this.state.tempPasswords ??= []
     this.persist() // 初始状态（含生成的长期密码）立即落盘
   }
 
@@ -119,6 +123,40 @@ export class Store {
   findDeviceByToken(token: string): AuthorizedDevice | undefined {
     const d = digest(token)
     return this.state.devices.find((x) => x.tokenDigest === d && !x.revoked)
+  }
+
+  /** 生成一次性/限时临时密码（REQ-003），默认 10 分钟 */
+  issueTemporaryPassword(ttlMs = 10 * 60_000): string {
+    const password = generatePassword()
+    this.state.tempPasswords = this.state.tempPasswords.filter((p) => p.expiresAt > Date.now())
+    this.state.tempPasswords.push({ password, expiresAt: Date.now() + ttlMs })
+    this.persist()
+    return password
+  }
+
+  /** 消费临时密码：一次性，用过即焚（REQ-003） */
+  consumeTemporaryPassword(password: string): boolean {
+    const idx = this.state.tempPasswords.findIndex((p) => p.password === password && p.expiresAt > Date.now())
+    if (idx < 0) return false
+    this.state.tempPasswords.splice(idx, 1)
+    this.persist()
+    return true
+  }
+
+  /** 签发短 TTL 临时 token（临时密码绑定所得），默认 12 小时 */
+  issueTemporaryToken(deviceId: string, ttlMs = 12 * 3600_000): string {
+    const token = randomBytes(32).toString('base64url')
+    this.state.tempTokens = this.state.tempTokens.filter((t) => t.expiresAt > Date.now() && !t.used)
+    this.state.tempTokens.push({ digest: digest(token), deviceId, expiresAt: Date.now() + ttlMs, used: false })
+    this.persist()
+    return token
+  }
+
+  /** 查找临时 token（验证一次有效，不消费） */
+  findTemporaryToken(token: string): { deviceId: string } | undefined {
+    const d = digest(token)
+    const t = this.state.tempTokens.find((x) => x.digest === d && !x.used && x.expiresAt > Date.now())
+    return t ? { deviceId: t.deviceId } : undefined
   }
 
   revokeDevice(deviceId: string): void {

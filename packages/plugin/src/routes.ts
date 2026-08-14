@@ -183,9 +183,15 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
           store.bindPublicKey(p.deviceId, taken.publicKeyJwk)
           return ok(res, rpcId, { deviceToken: token })
         }
-        case 'device.bindTemporary':
-          // TODO(REQ-003): 临时密码实现（一次性/限时），M1 测试 loop 补齐
-          return fail(res, rpcId, ERROR_CODES.capUnsupported, 'temporary password not implemented yet')
+        case 'device.bindTemporary': {
+          const p = payload as { deviceId?: string; password?: string }
+          if (!p.deviceId || !p.password) return fail(res, rpcId, ERROR_CODES.badRequest, 'missing fields')
+          if (!verifier.checkTemporaryPassword(p.password)) {
+            return fail(res, rpcId, ERROR_CODES.authFailed, 'bad or expired temporary password')
+          }
+          const token = store.issueTemporaryToken(p.deviceId)
+          return ok(res, rpcId, { deviceToken: token, expiresAt: Date.now() + 12 * 3600_000 })
+        }
         case 'session.list':
           return passThrough(res, rpcId, () => apiProxy.sessions.list({ rpcId, payload: payload as { cursor?: string } }))
         case 'session.history':
@@ -214,10 +220,23 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
           return passThrough(res, rpcId, () =>
             apiProxy.sessions.selectModel({ rpcId, payload: payload as { sessionId: string; provider: string; model: string; reasoningEffort?: string } }),
           )
-        case 'permission.get':
-        case 'permission.set':
-          // TODO(REQ-008): permissions projection 透传，M1 测试 loop 对齐 dsh-host-apiproxy
-          return fail(res, rpcId, ERROR_CODES.capUnsupported, 'permission passthrough pending')
+        case 'permission.get': {
+          const p = payload as { sessionId?: string }
+          if (!p.sessionId) return fail(res, rpcId, ERROR_CODES.badRequest, 'sessionId required')
+          // 权限预设读取：历史尾部 projection 基线（与参考实现同源）
+          const r = await apiProxy.sessions.history({ rpcId, payload: { sessionId: p.sessionId, maxMessages: 1 } })
+          if (!r.result.ok) return fail(res, rpcId, r.result.error.code, r.result.error.message)
+          const projections = (r.result.value as { projections?: Record<string, unknown> })?.projections
+          return ok(res, rpcId, { permissions: projections?.['permissions'] ?? null })
+        }
+        case 'permission.set': {
+          const p = payload as { sessionId?: string; value?: string }
+          if (!p.sessionId || typeof p.value !== 'string') return fail(res, rpcId, ERROR_CODES.badRequest, 'sessionId/value required')
+          // 权限预设切换 = /permission 斜杠命令（与参考实现同源，mode-agnostic）
+          return passThrough(res, rpcId, () =>
+            apiProxy.sessions.prompt({ rpcId, payload: { sessionId: p.sessionId as string, mode: 'queue', content: [{ type: 'text', text: `/permission ${p.value}` }] } }),
+          )
+        }
         case 'workspace.create':
           return passThrough(res, rpcId, () =>
             apiProxy.workspace.create({ rpcId, payload: payload as { path: string } }),

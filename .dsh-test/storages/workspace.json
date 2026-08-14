@@ -5,10 +5,20 @@
   },
   "global": {
     "initialized": true,
-    "workspaceIds": [],
+    "workspaceIds": [
+      "fddd94c5-7c79-48e5-8c31-64564993933b"
+    ],
     "archivedSessionIds": []
   },
   "tables": {
-    "workspaces": {}
+    "workspaces": {
+      "fddd94c5-7c79-48e5-8c31-64564993933b": {
+        "path": "/Users/zz/Desktop/ws/Code/programs/dpsk-far/.dsh-test/smoke-workspace",
+        "title": "smoke-workspace",
+        "sessionIds": [],
+        "createdAt": "2026-08-14T16:56:57.852Z",
+        "updatedAt": "2026-08-14T16:56:57.852Z"
+      }
+    }
   }
 }

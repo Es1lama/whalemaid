@@ -36,10 +36,21 @@ export class PasswordVerifier implements CredentialVerifier {
 
   constructor(private store: Store) {}
 
-  /** 绑定流程专用：验密码（长期密码；临时密码 TODO REQ-003），成功返回 true */
+  /** 绑定流程专用：验长期密码，成功返回 true */
   checkPassword(password: string, clientKey = ''): boolean {
     if (!this.fails.allowed(clientKey)) return false
     if (password === this.store.longPassword) {
+      this.fails.recordSuccess(clientKey)
+      return true
+    }
+    this.fails.recordFail(clientKey)
+    return false
+  }
+
+  /** 绑定流程专用：消费一次性/限时临时密码（REQ-003） */
+  checkTemporaryPassword(password: string, clientKey = ''): boolean {
+    if (!this.fails.allowed(clientKey)) return false
+    if (this.store.consumeTemporaryPassword(password)) {
       this.fails.recordSuccess(clientKey)
       return true
     }
@@ -52,6 +63,8 @@ export class PasswordVerifier implements CredentialVerifier {
     if (!header.startsWith('Bearer ')) return null
     const token = header.slice('Bearer '.length)
     const device = this.store.findDeviceByToken(token)
-    return device ? device.deviceId : null
+    if (device) return device.deviceId
+    const temp = this.store.findTemporaryToken(token)
+    return temp ? temp.deviceId : null
   }
 }
