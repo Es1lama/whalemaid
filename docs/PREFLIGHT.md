@@ -1,7 +1,8 @@
 # WhaleMaid · 启动前清单（Preflight）
 
-> 阻塞项已全部敲定，M0 已启动。本文件是 M0 的路线图与纪律声明（唯一现行版，旧版只存 git 历史）。
-> 环境注记：本机访问 GitHub 走规则代理 `http://127.0.0.1:7890`；gh 已登录账号 **Es1lama**；双仓已建并推送（公开 whalemaid / 私有 whalemaid-console）。
+> M0 已收官、M1/V1 进行中（唯一现行版，旧版只存 git 历史）。
+> 环境注记：仓库现位于工作区子目录 `whalemaid/`；GitHub 走代理 `http://127.0.0.1:7890`；gh 账号 **Es1lama**；双仓已建已推（公开 whalemaid / 私有 whalemaid-console）。
+> 移动端原生（ADR-037）：Android(Kotlin) 本地先行；iOS(SwiftUI) 源码 + CI macOS 验证。
 
 ---
 
@@ -9,10 +10,10 @@
 
 | # | 项 | 结论 |
 |---|---|---|
-| B1 | 定名 | **WhaleMaid（鲸娘）**，代码名 `whalemaid`；github.com/esilama/whalemaid 已核实可用，**待用户创建仓库** |
+| B1 | 定名 | **WhaleMaid（鲸娘）**，代码名 `whalemaid`；仓库 github.com/Es1lama/whalemaid（已建已推） |
 | B2 | 技术栈 | **中继/控制面 Rust**；插件/移动端 TypeScript（React PWA）；SQLite；TLS+WebCrypto |
 | B3 | Level 定义 | Level -1（仅邮箱：极高限速，一周停服）/ Level 0（绑手机：高限速限并发）/ Level 1（订阅：放宽+恶意/亏损阈值，绑手机送试用） / Level 2（增值） |
-| B4 | 仓库归属 | 个人账号 **esilama** |
+| B4 | 仓库归属 | gh 账号 **Es1lama**（双仓已建已推） |
 
 ## 2. 纪律声明（一劳永逸）
 

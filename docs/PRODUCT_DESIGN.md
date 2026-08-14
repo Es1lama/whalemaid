@@ -36,7 +36,7 @@
 
 插件/移动端 TypeScript（React PWA）；中继/控制面 Rust（axum/tokio + SQLite）；传输 TLS + WebCrypto。
 
-**多端与跨平台策略**：宿主插件（Node/TS）天然跨平台，MVP 即覆盖 macOS/Ubuntu/Windows（后续补各平台安装包与文档）；客户端 **Web 先行**，Android/iOS/鸿蒙后置——保证方式不是"代码可移植"，而是**统一 API 契约**（客户端只依赖公开 API，UI 与后端解耦；原生端未来对着同一契约实现，代码影响小）。
+**多端与跨平台策略（v2 修订）**：手机端目标为**原生体验**（Web PWA 仅为兜底）。顺序决策（ADR-037）：本机无完整 Xcode（有 Swift 编译器但无 iOS SDK）→ **Android（Kotlin）本机先行全验证；iOS（SwiftUI）源码并行、由 GitHub Actions macOS runner 做构建验证**。宿主插件（Node/TS）跨平台（macOS/Ubuntu/Windows）。统一 API 契约（REQ-018）仍是唯一权威：两个原生端与 PWA 都对着 docs/protocol.md 实现。
 
 ## §4 服务分层
 

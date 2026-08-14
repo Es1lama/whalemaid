@@ -37,6 +37,7 @@
 | ADR-030 | 闭源定位 | 闭源 = **完整控制管理系统**（账号/计费/控制台/风控/工单/运营后台/Level 2），盈利性代码全部收敛于此 | DESIGN §8 |
 | ADR-031 | S0/S1 结论 | 插件形态/宿主 API/browse seam/凭据/web 路由全部静态确认可行；**直连改走插件自建 listener（选项 B）**——rc.6 CLI 拒绝 `--host 0.0.0.0`，自建 server + `toFetchHandler(ctx.apiProxy)` 不依赖官方绑定 | research/spike-S0-S1 |
 | ADR-036 | 双仓分离 | 开源（AGPL）与闭源控制台分仓；`packages/contract` 为边界（统一 API 契约，双仓共用）；社区代码进闭源仓须 CLA（ADR-027） | DESIGN §0 |
+| ADR-037 | 原生端策略 | 手机端原生优先（Web 仅兜底）；本机无 Xcode → Android(Kotlin) 本地全验证先行，iOS(SwiftUI) 源码并行 + CI macOS runner 构建验证；两端同对 docs/protocol.md 实现 | DESIGN §3 |
 | ADR-032 | S2 结论 | rathole sidecar 定案：控制面写配置+托管子进程+热重载增删；每设备一 service+token；吊销=移除条目热重载；noise 加密+心跳 | research/spike-S2-S5 |
 | ADR-033 | S3 结论 | 设备密钥 = PWA WebCrypto ECDSA P-256 不可导出，IndexedDB 持久化；挑战-应答握手；重装即重新配对 | research/spike-S2-S5 |
 | ADR-034 | S4 结论 | 热词库走官方定制热词 HTTP API（vocabulary 增删改查 + 实时会话带 vocabulary_id）；BYOK 同机制 | research/spike-S2-S5 |
