@@ -11,9 +11,10 @@ export const name = 'whalemaid'
 export const inject = ['apiProxy']
 
 export { Config } from './config.js'
+import type { Config } from './config.js'
 
 export function apply(ctx: Context) {
-  const config = ctx.config as unknown as import('./config.js').Config
+  const config = (ctx as unknown as { config: Config }).config
   const store = new Store(config.dataDir)
   const verifier = new PasswordVerifier(store)
   const hub = new EventHub()

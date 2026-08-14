@@ -2,3 +2,10 @@ packages:
   - packages/contract
   - packages/plugin
   - packages/mobile
+
+allowBuilds:
+  esbuild: set this to true or false
+
+onlyBuiltDependencies:
+  - esbuild
+verifyDepsBeforeRun: false

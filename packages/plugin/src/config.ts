@@ -1,6 +1,6 @@
 // SPEC: docs/PREFLIGHT.md（选项 B：插件自建 listener）
 // SPEC: docs/protocol.md#PROTO-001 承载
-import { Schema } from '@deepseek-ai/schemastery'
+import Schema from '@deepseek-ai/schemastery'
 
 export interface Config {
   /** 监听地址。默认 loopback；直连模式（REQ-001）用户改为 0.0.0.0 */

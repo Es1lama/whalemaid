@@ -35,14 +35,14 @@ export function digest(value: string): string {
 
 export class Store {
   private state: StoreState
-  private file: string
+  private path: string
 
   constructor(dataDir?: string) {
     const base = dataDir || join(homedir(), '.dsh', 'whalemaid')
-    this.file = join(base, 'store.json')
+    this.path = join(base, 'store.json')
     mkdirSync(base, { recursive: true })
-    this.state = existsSync(this.file)
-      ? (JSON.parse(readFileSync(this.file, 'utf8')) as StoreState)
+    this.state = existsSync(this.path)
+      ? (JSON.parse(readFileSync(this.path, 'utf8')) as StoreState)
       : {
           longPassword: this.newPassword(),
           pendingNonces: {},
@@ -58,7 +58,7 @@ export class Store {
   }
 
   private persist(): void {
-    writeFileSync(this.file, JSON.stringify(this.state, null, 2), { mode: 0o600 })
+    writeFileSync(this.path, JSON.stringify(this.state, null, 2), { mode: 0o600 })
   }
 
   get longPassword(): string {
@@ -66,7 +66,7 @@ export class Store {
   }
 
   get file(): string {
-    return this.file
+    return this.path
   }
 
   rotatePassword(): string {
