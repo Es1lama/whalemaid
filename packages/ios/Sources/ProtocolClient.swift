@@ -1,7 +1,7 @@
 // SPEC: docs/protocol.md#PROTO-001/003..007 协议客户端（URLSession + 手写 SSE）
 import Foundation
 
-public final class ProtocolClient {
+public final class ProtocolClient: @unchecked Sendable {
   public let base: String
   public var token: String?
 
@@ -96,10 +96,12 @@ public final class ProtocolClient {
   }
 
   /// SSE（PROTO-001）：逐行读取，data 帧交给回调；返回可取消的 Task
-  public func events(onEvent: @escaping ([String: Any]) -> Void, onDisconnect: @escaping (String?) -> Void) -> Task<Void, Never> {
+  public func events(onEvent: @escaping @Sendable ([String: Any]) -> Void, onDisconnect: @escaping @Sendable (String?) -> Void) -> Task<Void, Never> {
+    let base = self.base
+    let token = self.token
     Task.detached {
-      var req = URLRequest(url: URL(string: "\(self.base)/api/v1/events")!)
-      if let token = self.token { req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
+      var req = URLRequest(url: URL(string: "\(base)/api/v1/events")!)
+      if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
       do {
         let (bytes, _) = try await URLSession.shared.bytes(for: req)
         var line = ""
