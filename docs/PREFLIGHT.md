@@ -42,7 +42,13 @@
 
 ### M1 剩余（测试 loop 继续）
 
-- TODO(REQ-003) 临时密码；TODO(REQ-008) permission.get/set 透传；SSE 桥接 DSH host/* 事件（PROTO-004 帧）；voice/vision/hotwords（V1）；移动端业务视图（目录模式/引用复制/工作区创建 UI）；workspace.create 冒烟（需 WHALEMAID_SMOKE_WORKSPACE=1）。
+- ✅ REQ-003 临时密码（一次性/限时 + 短 TTL token，单测覆盖）；
+- ✅ REQ-008 permission.get/set 透传（projections 基线 + /permission 命令）；
+- ✅ 移动端完整视图：登录双模式/主页（工作区+会话）/目录浏览器（REQ-009）/聊天（REQ-005/006/007）+ 目录模式（REQ-010）+ 引用复制（REQ-011）；
+- ✅ 插件直连服务 /m（完整移动 UI，REQ-001 闭环）；workspace.list 透传；
+- ⬜ SSE 事件桥：已注册 host/session-status，事件流量验证需手机端实测；
+- ⬜ workspace.create 冒烟已验证（8/8）；语音/视觉/热词 = V1 范围（REQ-020..022）；
+- ⬜ 精确 HistoryEntry 渲染与模型 provider 分组目录（骨架级提取，待对齐类型）。
 
 ### Spike 清单（先验证再架构，防返工）
 

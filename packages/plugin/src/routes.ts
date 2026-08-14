@@ -176,15 +176,16 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
     }
 
     // 认证闸门（TM-005：吊销设备即拒绝）
+    let deviceId = ''
     if (!PUBLIC_METHODS.has(method)) {
-      const deviceId = await verifier.verify({ header: req.headers.authorization, method })
+      deviceId = (await verifier.verify({ header: req.headers.authorization, method })) ?? ''
       if (!deviceId) {
         store.audit('unknown', method, false)
         return fail(res, rpcId, ERROR_CODES.authFailed, 'invalid or revoked device token')
       }
     }
 
-    store.audit('n/a', method, true)
+    store.audit(deviceId || 'anonymous', method, true)
     try {
       switch (method) {
         case 'device.handshake': {
@@ -300,7 +301,7 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
           return fail(res, rpcId, ERROR_CODES.methodUnknown, `unknown method: ${method}`)
       }
     } catch (err) {
-      store.audit('n/a', method, false)
+      store.audit(deviceId || 'unknown', method, false)
       return fail(res, rpcId, ERROR_CODES.serverError, err instanceof Error ? err.message.slice(0, 200) : 'internal error')
     }
   }

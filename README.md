@@ -12,7 +12,27 @@ WhaleMaid 是 DSH 的接入层：手机是电脑上 DSH 的"增强手柄"——�
 
 ## 状态
 
-早期开发（M0/M1）。本 README 的快速开始将在 v0.1 发布时补全。
+早期开发（M0 完成，M1 骨架可用）。已实机验证：插件挂载、设备绑定（挑战-应答）、会话/工作区/目录浏览透传、直连移动 UI（8/8 接口冒烟）。语音/视觉/热词属 V1（见 docs/requirements.md）。
+
+## 快速开始（直连模式，开发/试用）
+
+前置：Node ≥ 24、pnpm、已安装 DeepSeek Harness（`npx @deepseek-ai/dsh`）。
+
+```sh
+# 1. 构建
+pnpm install --ignore-scripts
+pnpm -r build && pnpm --filter @whalemaid/mobile build && pnpm --filter @whalemaid/plugin build
+
+# 2. 安装到你的 web profile（以实际路径为准）
+dsh plugin --profile web add link:$(pwd)/packages/plugin
+
+# 3. 重启 dsh web，插件默认监听 127.0.0.1:3180
+# 4. 手机（同局域网）打开 http://<电脑IP>:3180/m
+#    - 设备 ID：自定（WHALE-XXXX-XXXX，避免 0/1/I/O）
+#    - 长期密码：<DSH_HOME>/whalemaid/store.json 的 longPassword
+```
+
+手机直连需插件绑定局域网：在 profile 的 cordis.patch.yml 给 `whalemaid` 行加配置 `host: 0.0.0.0`（设置界面为后续版本）。
 
 ## 结构
 
