@@ -1,0 +1,16 @@
+[package]
+name = "whalemaid-relay"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+description = "WhaleMaid 中继控制面：设备注册/授权/吊销 + rathole sidecar 管理（SPEC: docs/protocol.md）"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"

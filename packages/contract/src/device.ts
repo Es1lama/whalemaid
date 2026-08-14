@@ -21,6 +21,8 @@ export interface HandshakeData {
 
 export interface BindPayload {
   deviceId: DeviceId
+  /** handshake 返回的 nonce（一次性，TM-004） */
+  nonce: Nonce
   /** 长期密码，仅绑定流程使用一次 */
   password: string
   /** ECDSA P-256 对 nonce 的签名（base64） */

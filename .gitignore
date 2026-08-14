@@ -3,3 +3,8 @@ node_modules/
 dist/
 *.log
 .env
+.toolchain/
+.pnpm-store/
+.cache/
+packages/relay/target/
+packages/relay/data/

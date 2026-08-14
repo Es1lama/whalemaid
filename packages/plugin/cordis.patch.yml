@@ -1,0 +1,4 @@
+# SPEC: docs/PREFLIGHT.md 插件安装形态（dsh plugin add）
+- insert:
+    - id: whalemaid
+      name: '@whalemaid/plugin'

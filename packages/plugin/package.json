@@ -1,0 +1,28 @@
+{
+  "name": "@whalemaid/plugin",
+  "version": "0.1.0",
+  "description": "WhaleMaid 被控插件：自建 listener + 认证网关，让手机接管本机 DSH（SPEC: docs/protocol.md）",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "license": "AGPL-3.0",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.6",
+    "@whalemaid/contract": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
