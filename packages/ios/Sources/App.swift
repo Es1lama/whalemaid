@@ -303,9 +303,11 @@ struct ChatView: View {
       load()
       Task {
         await client.events(onEvent: { frame in
-          let status = (frame["payload"] as? [String: Any])?["status"] as? String
-          if status == "running" { running = true }
-          if status == "done" { running = false; load() }
+          Task { @MainActor in
+            let status = (frame["payload"] as? [String: Any])?["status"] as? String
+            if status == "running" { running = true }
+            if status == "done" { running = false; load() }
+          }
         }, onDisconnect: { _ in })
       }
     }
