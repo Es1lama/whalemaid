@@ -47,7 +47,8 @@ export function extractKeywords(text: string, limit = 30): string[] {
   const bump = (t: string, weight = 1) => count.set(t, (count.get(t) ?? 0) + weight)
   for (const t of quotedTerms(text)) bump(t, 2)
   for (const t of caseTerms(text)) bump(t, 1)
-  for (const t of snakeTerms(text)) bump(t, 1)
+  // 复合标识符（snake/连字符）本身就是强技术信号，等同显式引用
+  for (const t of snakeTerms(text)) bump(t, 2)
   for (const t of acronymTerms(text)) bump(t, 1)
   for (const t of mixedTerms(text)) bump(t, 1)
   return [...count.entries()]
