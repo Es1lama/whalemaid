@@ -1,0 +1,25 @@
+name: Whalemaid
+options:
+  bundleIdPrefix: dev.whalemaid
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Whalemaid-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: 直连模式需要访问局域网内的电脑
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.whalemaid.app
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+    scheme:
+      testTargets: []
