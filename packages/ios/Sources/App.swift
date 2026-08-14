@@ -67,7 +67,7 @@ struct LoginView: View {
   @State private var deviceId = ""
   @State private var password = ""
   @State private var temporary = false
-  @State private var error = ""
+  @State private var errorMessage = ""
   @State private var busy = false
 
   var body: some View {
@@ -78,7 +78,7 @@ struct LoginView: View {
         SecureField(temporary ? "临时密码" : "长期密码", text: $password)
         Toggle("使用临时密码", isOn: $temporary)
       }
-      if !error.isEmpty { Text(error).foregroundStyle(.red) }
+      if !errorMessage.isEmpty { Text(errorMessage).foregroundStyle(.red) }
       Button {
         busy = true
         Task {
@@ -117,7 +117,7 @@ struct HomeView: View {
   @ObservedObject var model: AppModel
   @State private var workspaces: [String] = []
   @State private var sessions: [SessionRow] = []
-  @State private var error = ""
+  @State private var errorMessage = ""
   @State private var browsing = false
 
   private func load() {
@@ -129,7 +129,7 @@ struct HomeView: View {
         sessions = ((s["items"] as? [[String: Any]]) ?? []).filter { $0["blank"] as? Bool != true }.map {
           SessionRow(id: $0["sessionId"] as? String ?? "", title: $0["title"] as? String ?? ($0["sessionId"] as? String ?? ""))
         }
-      } catch { error = error.localizedDescription }
+      } catch { errorMessage = error.localizedDescription }
     }
   }
 
@@ -141,13 +141,13 @@ struct HomeView: View {
             do {
               let r = try client.sessionCreate(workspaceId: nil)
               if let id = r["sessionId"] as? String { model.route = .chat(id) }
-            } catch { error = error.localizedDescription }
+            } catch { errorMessage = error.localizedDescription }
           }
         }
         Button("＋ 新建工作区") { browsing = true }
         Button("退出登录", role: .destructive) { model.logout() }
       }
-      if !error.isEmpty { Text(error).foregroundStyle(.red) }
+      if !errorMessage.isEmpty { Text(errorMessage).foregroundStyle(.red) }
       Section("工作区") {
         ForEach(workspaces, id: \.self) { Text($0) }
       }
@@ -175,7 +175,7 @@ struct DirectorySheet: View {
   @State private var path = ""
   @State private var entries: [String] = []
   @State private var newName = ""
-  @State private var error = ""
+  @State private var errorMessage = ""
 
   private func nav(_ p: String? = nil) {
     Task {
@@ -183,7 +183,7 @@ struct DirectorySheet: View {
         let d = try client.listDirectory(p)
         path = d["path"] as? String ?? ""
         entries = ((d["entries"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
-      } catch { error = error.localizedDescription }
+      } catch { errorMessage = error.localizedDescription }
     }
   }
 
@@ -191,7 +191,7 @@ struct DirectorySheet: View {
     NavigationStack {
       List {
         Text(path).font(.caption).foregroundStyle(.secondary)
-        if !error.isEmpty { Text(error).foregroundStyle(.red) }
+        if !errorMessage.isEmpty { Text(errorMessage).foregroundStyle(.red) }
         ForEach(entries, id: \.self) { name in
           Button("📁 \(name)") { nav(path == "/" ? "/\(name)" : "\(path)/\(name)") }
         }
@@ -212,7 +212,7 @@ struct DirectorySheet: View {
                 guard let wid = w["workspaceId"] as? String else { return }
                 let s = try client.sessionCreate(workspaceId: wid)
                 if let sid = s["sessionId"] as? String { onOpened(sid) }
-              } catch { error = error.localizedDescription }
+              } catch { errorMessage = error.localizedDescription }
             }
           }.disabled(path.isEmpty)
         }
@@ -231,7 +231,7 @@ struct ChatView: View {
   @State private var messages: [(String, String)] = []
   @State private var draft = ""
   @State private var running = false
-  @State private var error = ""
+  @State private var errorMessage = ""
   @State private var showToc = false
 
   private func load() {
@@ -244,7 +244,7 @@ struct ChatView: View {
           if !chunks.isEmpty { msgs.append(("assistant", chunks.joined(separator: "\n"))) }
         }
         messages = msgs
-      } catch { error = error.localizedDescription }
+      } catch { errorMessage = error.localizedDescription }
     }
   }
 
@@ -275,7 +275,7 @@ struct ChatView: View {
       }
       .safeAreaInset(edge: .bottom) {
         VStack(spacing: 8) {
-          if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) }
+          if !errorMessage.isEmpty { Text(errorMessage).foregroundStyle(.red).font(.caption) }
           HStack {
             TextField("布置任务…", text: $draft, axis: .vertical).lineLimit(1...4).textFieldStyle(.roundedBorder)
             Button("发送") {
@@ -284,7 +284,7 @@ struct ChatView: View {
               messages.append(("user", text))
               running = true
               Task {
-                do { _ = try client.prompt(sessionId, text: text) } catch { error = error.localizedDescription }
+                do { _ = try client.prompt(sessionId, text: text) } catch { errorMessage = error.localizedDescription }
               }
             }.disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || running)
             Button("停止") { Task { _ = try? client.stop(sessionId) } }.disabled(!running)
