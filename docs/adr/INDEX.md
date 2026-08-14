@@ -35,6 +35,7 @@
 | ADR-028 | 文档治理 | 六原则：简洁、有效、时效（旧版只存 git 历史）、指导、与代码一一对应、可溯源 | PREFLIGHT §2 |
 | ADR-029 | 多端策略 | Web 先行；Android/iOS/鸿蒙后置；**统一 API 契约**（客户端只依赖公开 API）保证多端影响小；宿主插件三平台（macOS/Ubuntu/Windows） | DESIGN §3 |
 | ADR-030 | 闭源定位 | 闭源 = **完整控制管理系统**（账号/计费/控制台/风控/工单/运营后台/Level 2），盈利性代码全部收敛于此 | DESIGN §8 |
+| ADR-031 | S0/S1 结论 | 插件形态/宿主 API/browse seam/凭据/web 路由全部静态确认可行；**直连改走插件自建 listener（选项 B）**——rc.6 CLI 拒绝 `--host 0.0.0.0`，自建 server + `toFetchHandler(ctx.apiProxy)` 不依赖官方绑定 | research/spike-S0-S1 |
 
 ## 升级规则
 
