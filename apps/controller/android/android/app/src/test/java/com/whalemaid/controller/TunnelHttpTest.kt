@@ -131,4 +131,24 @@ class TunnelHttpTest {
         val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.mux", "")
         assertTrue(req.startsWith("GET /api/events.mux HTTP/1.1\r\n"))
     }
+
+    // ---- 状态码构造：任意数值都必须产出合法 IStatus（防 "Status can't be null" 崩溃） ----
+
+    @Test
+    fun nanoStatusNeverReturnsNull() {
+        for (code in listOf(200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 405, 416, 423, 429, 500, 501, 502, 503, 505)) {
+            val s = NanoStatus.of(code)
+            assertEquals(code, s.requestStatus)
+        }
+    }
+
+    // ---- TOFU 捕获端口必须等于实际连接端口（默认 9080） ----
+
+    @Test
+    fun controlPortOfUsesActualPort() {
+        assertEquals(9180, TunnelHttp.controlPortOf("127.0.0.1:9180"))
+        assertEquals(9080, TunnelHttp.controlPortOf("relay.example.com"))
+        assertEquals(9443, TunnelHttp.controlPortOf("relay.example.com:9443"))
+        assertEquals(9080, TunnelHttp.controlPortOf("relay.example.com:notaport"))
+    }
 }

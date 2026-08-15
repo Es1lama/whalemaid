@@ -78,4 +78,7 @@ object TunnelHttp {
     /** 官方事件通道（/api/events.mux|host）的 WS upgrade 请求行——使用页面实际请求的 URI，不硬编码 */
     fun buildEventsUpgradeRequest(uri: String, secWebSocketKey: String): String =
         "GET $uri HTTP/1.1\r\nHost: $HOST_AUTHORITY\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: $secWebSocketKey\r\nSec-WebSocket-Version: 13\r\n\r\n"
+
+    /** 中继控制面端口 = server 串实际端口（TOFU 指纹必须从该端口捕获）；缺省 9080（部署默认） */
+    fun controlPortOf(server: String): Int = server.substringAfter(":", "9080").substringBefore("/").toIntOrNull() ?: 9080
 }

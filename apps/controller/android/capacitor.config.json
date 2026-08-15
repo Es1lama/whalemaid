@@ -8,6 +8,10 @@
   },
   "server": {
     "androidScheme": "https",
-    "cleartext": true
+    "cleartext": true,
+    "allowNavigation": [
+      "127.0.0.1",
+      "localhost"
+    ]
   }
 }
