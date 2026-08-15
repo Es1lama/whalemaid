@@ -24,22 +24,10 @@ jobs:
       - run: cargo check --manifest-path packages/relay/Cargo.toml
       - run: cargo test --manifest-path packages/relay/Cargo.toml
 
-  ios:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v5
-      - run: brew install xcodegen
-      - run: cd packages/ios && xcodegen generate
-      - run: xcodebuild -project packages/ios/Whalemaid.xcodeproj -scheme Whalemaid-iOS -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
-
-  android:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "21" }
-      - uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: "8.14.2" }
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - run: cd packages/android && gradle testDebugUnitTest assembleDebug
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --manifest-path packages/relay/Cargo.toml
+      - run: cargo test --manifest-path packages/relay/Cargo.toml

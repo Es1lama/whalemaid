@@ -1,4 +1,0 @@
-# SPEC: docs/adr/INDEX.md#ADR-038 控制端插件（独立安装）
-- insert:
-    - id: whalemaid-control
-      name: '@whalemaid/control'
