@@ -59,8 +59,24 @@ async fn main() -> Result<()> {
     }
 
     let app = api::router(state.clone());
-    let listener = tokio::net::TcpListener::bind(&config.listen).await?;
-    println!("[whalemaid-relay] 控制面监听 http://{}", config.listen);
+
+    // SEC-001：控制面仅 TLS（自签证书启动时生成/复用；指纹打印供受控端固定，SSH 式 TOFU）
+    let cert_path = config.data_dir.join("relay-cert.pem");
+    let key_path = config.data_dir.join("relay-key.pem");
+    if !cert_path.exists() {
+        let cert = rcgen::generate_simple_self_signed(vec!["whalemaid-relay".to_string()])
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        std::fs::write(&cert_path, cert.cert.pem()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        std::fs::write(&key_path, cert.key_pair.serialize_pem()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!(
+            "[whalemaid-relay] 首次生成自签证书，指纹（受控端 relayFingerprint 固定此值）: {}",
+            sha256_hex(cert.cert.der().as_ref())
+        );
+    }
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!("[whalemaid-relay] 控制面监听 https://{}（TLS）", config.listen);
 
     // 优雅退出：Ctrl-C 时先停 sidecar（rathole），再退
     let state_for_signal = state.clone();
@@ -70,6 +86,13 @@ async fn main() -> Result<()> {
         std::process::exit(0);
     });
 
-    axum::serve(listener, app).await?;
+    axum_server::bind_rustls(config.listen.parse()?, tls).serve(app.into_make_service()).await?;
     Ok(())
+}
+
+fn sha256_hex(der: &[u8]) -> String {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(der);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }

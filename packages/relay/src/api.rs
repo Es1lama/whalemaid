@@ -32,11 +32,11 @@ pub struct AppState {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/devices", post(register).get(list))
-        .route("/devices/:id", delete(revoke))
-        .route("/devices/:id/heartbeat", post(heartbeat))
-        .route("/devices/:id/tunnel", post(tunnel))
-        .route("/connect", post(connect))
+        .route("/_whalemaid/devices", post(register).get(list))
+        .route("/_whalemaid/devices/:id", delete(revoke))
+        .route("/_whalemaid/devices/:id/heartbeat", post(heartbeat))
+        .route("/_whalemaid/devices/:id/tunnel", post(tunnel))
+        .route("/_whalemaid/connect", post(connect))
         .with_state(state)
 }
 

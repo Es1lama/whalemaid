@@ -3,11 +3,14 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomBytes, scryptSync } from 'node:crypto'
+import { randomBytes, scryptSync, createHash } from 'node:crypto'
+import https from 'node:https'
 
 export interface RelayClientConfig {
   relayUrl: string
   relayInstallCode: string
+  /** SEC-001：服务端证书 SHA-256 指纹（固定校验，防 MITM） */
+  relayFingerprint: string
   ratholeBin: string
   /** 服务器 rathole 控制端口（默认 2333） */
   relayPort: number
@@ -38,6 +41,45 @@ export function phcScrypt(password: string, salt: Buffer = randomBytes(16)): str
   return `$scrypt$ln=14,r=8,p=1$${b64(salt)}$${b64(hash)}`
 }
 
+interface HttpsResponse {
+  status: number
+  json(): Promise<Record<string, unknown>>
+  text(): Promise<string>
+}
+
+/** SEC-001：固定指纹的 HTTPS 请求。
+ * 刻意 rejectUnauthorized:false——CA 链校验被"证书 SHA-256 指纹固定"替代（SSH TOFU 模型）；
+ * 指纹不匹配立即断连，故不因跳过 CA 校验而降低安全性。 */
+function pinnedRequest(url: string, options: { method: string; headers: Record<string, string>; body?: string; fingerprint: string }): Promise<HttpsResponse> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method: options.method, headers: options.headers, rejectUnauthorized: false }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (c: Buffer) => chunks.push(c))
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8')
+        resolve({
+          status: res.statusCode ?? 0,
+          json: async () => JSON.parse(text) as Record<string, unknown>,
+          text: async () => text,
+        })
+      })
+    })
+    req.on('socket', (socket) => {
+      socket.on('secureConnect', () => {
+        const tlsSocket = socket as import('node:tls').TLSSocket
+        const cert = tlsSocket.getPeerCertificate(true)
+        const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
+        if (options.fingerprint && fp !== options.fingerprint.replace(/[^0-9a-f]/gi, '')) {
+          req.destroy(new Error(`证书指纹不匹配（预期 ${options.fingerprint.slice(0, 16)}… 实际 ${fp.slice(0, 16)}…），拒绝连接（SEC-001 防中间人）`))
+        }
+      })
+    })
+    req.on('error', reject)
+    if (options.body) req.write(options.body)
+    req.end()
+  })
+}
+
 export class RelayClient {
   private child: ChildProcess | null = null
   private timer: NodeJS.Timeout | undefined
@@ -46,42 +88,56 @@ export class RelayClient {
 
   async start(): Promise<RelayBinding> {
     const base = this.cfg.relayUrl.replace(/\/$/, '')
-    // SEC-001：安装码注册（凭据已保存则换用凭据鉴权直连隧道重连路径——当前版本注册接口幂等拒绝重复，故仅在无凭据时注册）
     let credential = this.cfg.savedCredential
-    if (!credential) {
-      const res = await fetch(`${base}/devices`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-install-code': this.cfg.relayInstallCode,
-        },
-        body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
-      })
-      if (!res.ok) throw new Error(`注册失败: ${res.status} ${await res.text()}`)
-      const reg = (await res.json()) as RelayBinding
-      credential = reg.credential
-      this.cfg.onCredential(credential)
+    if (credential) {
+      // 凭据复用：先试隧道；401/403 = 该中继不认识此凭据（换中继/清档）→ 清空重注册
+      try {
+        const binding = await this.establishTunnel(base, credential)
+        this.startHeartbeat(base, credential)
+        return binding
+      } catch (e) {
+        this.log(`[whalemaid] 凭据失效（${e instanceof Error ? e.message.slice(0, 60) : String(e)}），重新注册`)
+        this.cfg.onCredential('')
+        credential = ''
+      }
     }
-    // 隧道：凭据换取最新隧道 token（/connect 服务端轮换语义由主控端使用；被控端用注册返回的初始 token 建隧道）
+    const res = await pinnedRequest(`${base}/_whalemaid/devices`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-install-code': this.cfg.relayInstallCode,
+      },
+      body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
+      fingerprint: this.cfg.relayFingerprint,
+    })
+    if (res.status >= 300) throw new Error(`注册失败: ${res.status} ${await res.text()}`)
+    const reg = (await res.json()) as unknown as RelayBinding
+    credential = reg.credential
+    this.cfg.onCredential(credential)
     const binding = await this.establishTunnel(base, credential)
-    // 心跳 20s（SEC-001 凭据鉴权；在线窗口 45s）
-    this.timer = setInterval(() => {
-      fetch(`${base}/devices/${this.cfg.deviceId}/heartbeat`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${credential}` },
-      }).catch(() => void 0)
-    }, 20_000)
-    this.timer.unref()
+    this.startHeartbeat(base, credential)
     return binding
   }
 
+  private startHeartbeat(base: string, credential: string): void {
+    this.timer = setInterval(() => {
+      pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/heartbeat`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${credential}` },
+        fingerprint: this.cfg.relayFingerprint,
+      }).catch(() => void 0)
+    }, 20_000)
+    this.timer.unref()
+  }
+
   private async establishTunnel(base: string, credential: string): Promise<RelayBinding> {
-    const res = await fetch(`${base}/devices/${this.cfg.deviceId}/tunnel`, {
+    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
       method: 'POST',
       headers: { authorization: `Bearer ${credential}` },
+      fingerprint: this.cfg.relayFingerprint,
     })
-    if (!res.ok) throw new Error(`隧道签发失败: ${res.status} ${await res.text()}`)
-    const binding = (await res.json()) as RelayBinding
+    if (res.status >= 300) throw new Error(`隧道签发失败: ${res.status} ${await res.text()}`)
+    const binding = (await res.json()) as unknown as RelayBinding
     const host = new URL(base).hostname
     const cfgText = [
       '[client]',

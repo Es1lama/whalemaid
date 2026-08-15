@@ -31,6 +31,7 @@ const DEFAULTS: Config = {
   visionModel: '',
   relayUrl: '',
   relayInstallCode: '',
+  relayFingerprint: '',
   relayPort: 2333,
   ratholeBin: 'rathole',
   allowPlainLan: false,
@@ -107,6 +108,7 @@ export function apply(ctx: Context, config?: Config): void {
         {
           relayUrl: resolved.relayUrl,
           relayInstallCode: resolved.relayInstallCode,
+          relayFingerprint: resolved.relayFingerprint,
           ratholeBin: resolved.ratholeBin,
           relayPort: resolved.relayPort,
           pluginPort: resolved.port,

@@ -753,11 +753,41 @@ function createVisionAdapter(cfg, resolveKey) {
 import { spawn } from "node:child_process";
 import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
-import { randomBytes as randomBytes3, scryptSync } from "node:crypto";
+import { randomBytes as randomBytes3, scryptSync, createHash as createHash2 } from "node:crypto";
+import https from "node:https";
 function phcScrypt(password, salt = randomBytes3(16)) {
   const hash = scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
   const b64 = (b) => b.toString("base64").replace(/=+$/, "");
   return `$scrypt$ln=14,r=8,p=1$${b64(salt)}$${b64(hash)}`;
+}
+function pinnedRequest(url, options) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method: options.method, headers: options.headers, rejectUnauthorized: false }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({
+          status: res.statusCode ?? 0,
+          json: async () => JSON.parse(text),
+          text: async () => text
+        });
+      });
+    });
+    req.on("socket", (socket) => {
+      socket.on("secureConnect", () => {
+        const tlsSocket = socket;
+        const cert = tlsSocket.getPeerCertificate(true);
+        const fp = createHash2("sha256").update(cert.raw ?? Buffer.alloc(0)).digest("hex");
+        if (options.fingerprint && fp !== options.fingerprint.replace(/[^0-9a-f]/gi, "")) {
+          req.destroy(new Error(`\u8BC1\u4E66\u6307\u7EB9\u4E0D\u5339\u914D\uFF08\u9884\u671F ${options.fingerprint.slice(0, 16)}\u2026 \u5B9E\u9645 ${fp.slice(0, 16)}\u2026\uFF09\uFF0C\u62D2\u7EDD\u8FDE\u63A5\uFF08SEC-001 \u9632\u4E2D\u95F4\u4EBA\uFF09`));
+        }
+      });
+    });
+    req.on("error", reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
 }
 var RelayClient = class {
   constructor(cfg, log) {
@@ -769,36 +799,51 @@ var RelayClient = class {
   async start() {
     const base = this.cfg.relayUrl.replace(/\/$/, "");
     let credential = this.cfg.savedCredential;
-    if (!credential) {
-      const res = await fetch(`${base}/devices`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-install-code": this.cfg.relayInstallCode
-        },
-        body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) })
-      });
-      if (!res.ok) throw new Error(`\u6CE8\u518C\u5931\u8D25: ${res.status} ${await res.text()}`);
-      const reg = await res.json();
-      credential = reg.credential;
-      this.cfg.onCredential(credential);
+    if (credential) {
+      try {
+        const binding2 = await this.establishTunnel(base, credential);
+        this.startHeartbeat(base, credential);
+        return binding2;
+      } catch (e) {
+        this.log(`[whalemaid] \u51ED\u636E\u5931\u6548\uFF08${e instanceof Error ? e.message.slice(0, 60) : String(e)}\uFF09\uFF0C\u91CD\u65B0\u6CE8\u518C`);
+        this.cfg.onCredential("");
+        credential = "";
+      }
     }
+    const res = await pinnedRequest(`${base}/_whalemaid/devices`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-install-code": this.cfg.relayInstallCode
+      },
+      body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
+      fingerprint: this.cfg.relayFingerprint
+    });
+    if (res.status >= 300) throw new Error(`\u6CE8\u518C\u5931\u8D25: ${res.status} ${await res.text()}`);
+    const reg = await res.json();
+    credential = reg.credential;
+    this.cfg.onCredential(credential);
     const binding = await this.establishTunnel(base, credential);
+    this.startHeartbeat(base, credential);
+    return binding;
+  }
+  startHeartbeat(base, credential) {
     this.timer = setInterval(() => {
-      fetch(`${base}/devices/${this.cfg.deviceId}/heartbeat`, {
+      pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/heartbeat`, {
         method: "POST",
-        headers: { authorization: `Bearer ${credential}` }
+        headers: { authorization: `Bearer ${credential}` },
+        fingerprint: this.cfg.relayFingerprint
       }).catch(() => void 0);
     }, 2e4);
     this.timer.unref();
-    return binding;
   }
   async establishTunnel(base, credential) {
-    const res = await fetch(`${base}/devices/${this.cfg.deviceId}/tunnel`, {
+    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
       method: "POST",
-      headers: { authorization: `Bearer ${credential}` }
+      headers: { authorization: `Bearer ${credential}` },
+      fingerprint: this.cfg.relayFingerprint
     });
-    if (!res.ok) throw new Error(`\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
+    if (res.status >= 300) throw new Error(`\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
     const binding = await res.json();
     const host = new URL(base).hostname;
     const cfgText = [
@@ -839,6 +884,7 @@ var Config = Schema.object({
   visionModel: Schema.string().default(""),
   relayUrl: Schema.string().default(""),
   relayInstallCode: Schema.string().default(""),
+  relayFingerprint: Schema.string().default(""),
   ratholeBin: Schema.string().default("rathole"),
   relayPort: Schema.number().default(2333),
   allowPlainLan: Schema.boolean().default(false)
@@ -859,6 +905,7 @@ var DEFAULTS = {
   visionModel: "",
   relayUrl: "",
   relayInstallCode: "",
+  relayFingerprint: "",
   relayPort: 2333,
   ratholeBin: "rathole",
   allowPlainLan: false
@@ -914,6 +961,7 @@ function apply(ctx, config) {
     {
       relayUrl: resolved.relayUrl,
       relayInstallCode: resolved.relayInstallCode,
+      relayFingerprint: resolved.relayFingerprint,
       ratholeBin: resolved.ratholeBin,
       relayPort: resolved.relayPort,
       pluginPort: resolved.port,

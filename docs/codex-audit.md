@@ -1,0 +1,15 @@
+# Codex 增量对齐审查
+
+审查基准：`docs/OWNER-DIRECTIVES.md` §原文留存 D-020..030。证据行号以本次工作区当前内容为准。
+
+## 逐条结论
+
+- D-020【未对齐】移植方案已明确“一个前端、多个壳”及主控端无需 DSH，但仍停留在待审/不写代码，UX 基线也承认官方前端移植未开始；现行产品设计还残留 Android Kotlin、iOS SwiftUI、全自研移动端等相反路线，未做到代码复用与远控逻辑落地。证据：docs/native-app-plan.md:1；docs/native-app-plan.md:3；docs/native-app-plan.md:8；docs/remote-ux-spec.md:40；docs/PRODUCT_DESIGN.md:39；docs/PRODUCT_DESIGN.md:59
+- D-021【未对齐】后续方案虽承认 Kotlin/SwiftUI 自研 UI 应由移植前端取代，但 ADR 索引与“唯一现行版”产品设计仍把 Kotlin/SwiftUI 原生路线列为有效决策，D-021 已被 D-022 修正后的废止状态没有一致传播。证据：docs/native-app-plan.md:51；docs/adr/INDEX.md:40；docs/PRODUCT_DESIGN.md:3；docs/PRODUCT_DESIGN.md:39
+- D-022【未对齐】方案文字正确描述“移植官方前端、同源 `/api` 经网关打到受控端”，但插件仍只接收自定 `/api/v1` RPC，协议也继续把 `/api/v1/<method>` 定为现行承载；因此“前端调用点不改、接口改打受控 DSH”尚未实现且文档互相冲突。证据：docs/native-app-plan.md:8；docs/native-app-plan.md:43；docs/native-app-plan.md:45；packages/plugin/src/routes.ts:164；packages/plugin/src/routes.ts:171；docs/protocol.md:12
+- D-023【未对齐】原生 App 壳、文件夹 UI、照片上传和语音录音均只列在待确认/里程碑中；UX 状态明确为前端移植未开始、文件夹 UI 待移植、照片与麦克风原生桥未实现，语音适配器还会因真实文件 URL 流程未完成直接报错。证据：docs/native-app-plan.md:15；docs/native-app-plan.md:35；docs/native-app-plan.md:36；docs/native-app-plan.md:37；docs/remote-ux-spec.md:40；docs/remote-ux-spec.md:42；docs/remote-ux-spec.md:43；packages/plugin/src/providers/voice.ts:40；packages/plugin/src/providers/voice.ts:42
+- D-024【未对齐】三端模型在 ADR/方案中表述正确，受控插件也已具备向中继注册、心跳并启动 rathole 隧道的代码；但主控 App 尚未开始、与中继未接通，故“受控端+主控端+服务端”整体尚未闭环。证据：docs/adr/INDEX.md:43；docs/native-app-plan.md:3；packages/relay/src/api.rs:35；packages/relay/src/api.rs:37；packages/plugin/src/index.ts:105；packages/plugin/src/index.ts:126；docs/remote-ux-spec.md:14；docs/remote-ux-spec.md:40
+- D-025【未对齐】所有者记录已定为 Capacitor 且 PC 同时提供 Electron 与 Web，但移植方案仍标“待确认”，PC 仍在 Electron/Tauri 二选一，既未固定 Electron+Web 双供，也未见对应主控端产物。证据：docs/OWNER-DIRECTIVES.md:45；docs/native-app-plan.md:15；docs/native-app-plan.md:19；docs/native-app-plan.md:20；docs/native-app-plan.md:63
+- D-026【未对齐】后端已新增受控端注册/心跳和“设备编号+密码”连接端点，插件也会自动接入中继；但设备列表仅管理员令牌可读，没有“主控端握手/同账号设备列表”接口与 App 流程，UX 文档仍明确当前要填 IP、密码匹配和秒连未通，尚未达到 UU/ToDesk 式闭环。证据：packages/relay/src/api.rs:35；packages/relay/src/api.rs:37；packages/relay/src/api.rs:89；packages/relay/src/api.rs:144；packages/relay/src/api.rs:145；packages/plugin/src/relay.ts:87；docs/remote-ux-spec.md:13；docs/remote-ux-spec.md:21；docs/remote-ux-spec.md:23；docs/remote-ux-spec.md:31
+- D-027【对齐】当前产出已把“先学习再构建”写成强制流程：先对照 rathole/frp/headscale/Tailscale/RustDesk，再列现状、修复和先红后绿验收；产品设计也要求先找轮子并优先 sidecar 复用，代码实际调用 rathole 而非重写隧道。证据：docs/security-audit.md:3；docs/security-audit.md:4；docs/security-audit.md:46；docs/security-audit.md:48；docs/security-audit-plan.md:3；docs/PRODUCT_DESIGN.md:23；docs/PRODUCT_DESIGN.md:26；packages/relay/src/rathole.rs:1；packages/relay/src/rathole.rs:7
+- D-028【对齐】已把“代表性问题触发同类全查”固化为 UX 与安全两套全量清单，而非只修 IP 单点：UX 扩展到发现、授权、连接、控制台、账号、提示共 22 条，安全扩展到注册、密码、信道、认证、重放、吊销、供应链等 11 环。证据：docs/remote-ux-spec.md:4；docs/remote-ux-spec.md:7；docs/remote-ux-spec.md:17；docs/remote-ux-spec.md:27；docs/remote-ux-spec.md:36；docs/remote-ux-spec.md:45；docs/remote-ux-spec.md:52；docs/security-audit-plan.md:8；docs/security-audit-plan.md:20；docs/security-audit-plan.md:28；docs/security-audit-plan.md:30

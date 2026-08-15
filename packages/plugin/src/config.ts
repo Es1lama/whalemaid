@@ -21,6 +21,8 @@ export interface Config {
   relayUrl: string
   /** SEC-001：服务端一次性安装码（受控端注册用） */
   relayInstallCode: string
+  /** SEC-001：服务端 TLS 证书 SHA-256 指纹（固定，SSH 式 TOFU；relay 启动日志打印） */
+  relayFingerprint: string
   ratholeBin: string
   relayPort: number
   /** SEC-005：允许非回环明文监听（默认拒绝；直连必须走中继或后续 TLS） */
@@ -39,6 +41,7 @@ export const Config: Schema<Config> = Schema.object({
   visionModel: Schema.string().default(''),
   relayUrl: Schema.string().default(''),
   relayInstallCode: Schema.string().default(''),
+  relayFingerprint: Schema.string().default(''),
   ratholeBin: Schema.string().default('rathole'),
   relayPort: Schema.number().default(2333),
   allowPlainLan: Schema.boolean().default(false),
