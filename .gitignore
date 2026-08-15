@@ -20,3 +20,4 @@ packages/android/local.properties
 
 # 中继实机测试产物（设备记录/隧道配置/自签私钥绝不入库）
 .relay-*/
+.dsh-test/
