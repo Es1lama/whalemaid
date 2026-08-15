@@ -301,11 +301,88 @@ fun ChatScreen(client: ProtocolClient, sessionId: String, onBack: () -> Unit) {
   val fullText = messages.joinToString("\n\n") { it.second }
   val toc = remember(fullText) { tocFromText(fullText) }
 
+  // 模型/思考强度与权限预设（REQ-007/008：绝对原生的 dsh 体验）
+  var sheet by remember { mutableStateOf<String?>(null) }
+  var modelOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+  var permOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+  var permCurrent by remember { mutableStateOf("") }
+
+  fun openModels() {
+    thread {
+      try {
+        val d = client.models(sessionId)
+        // 尽力提取 provider/model 目录（精确目录结构对齐见 TODO：session.models 类型）
+        val opts = mutableListOf<Pair<String, String>>()
+        val groups = d["providers"]?.jsonArray ?: d["groups"]?.jsonArray ?: emptyList()
+        for (g in groups) {
+          val go = g.jsonObject
+          val pname = go["provider"]?.jsonPrimitive?.contentOrNull ?: go["name"]?.jsonPrimitive?.contentOrNull ?: continue
+          val models = go["models"]?.jsonArray ?: emptyList()
+          for (m in models) opts.add(pname to m.jsonObject["name"]?.jsonPrimitive?.contentOrNull.orEmpty())
+        }
+        modelOptions = opts
+        sheet = "model"
+      } catch (e: Exception) { error = e.message ?: "模型目录加载失败" }
+    }
+  }
+
+  fun openPerms() {
+    thread {
+      try {
+        val p = client.permissionGet(sessionId)["permissions"]?.jsonObject
+        val opts = p?.get("options")?.jsonArray?.map {
+          val o = it.jsonObject
+          (o["value"]?.jsonPrimitive?.contentOrNull ?: "") to (o["name"]?.jsonPrimitive?.contentOrNull ?: "")
+        } ?: emptyList()
+        permOptions = opts
+        permCurrent = p?.get("currentValue")?.jsonPrimitive?.contentOrNull ?: ""
+        sheet = "perm"
+      } catch (e: Exception) { error = e.message ?: "权限加载失败" }
+    }
+  }
+
   Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       OutlinedButton(onBack) { Text("←") }
       Text("会话", style = MaterialTheme.typography.titleMedium)
       OutlinedButton({ showToc = !showToc }, enabled = toc.isNotEmpty()) { Text("目录") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      OutlinedButton(::openModels) { Text("模型/思考强度") }
+      OutlinedButton(::openPerms) { Text(if (permCurrent.isEmpty()) "权限" else "权限: $permCurrent") }
+    }
+    sheet?.let { s ->
+      Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          when (s) {
+            "model" -> {
+              Text("模型与思考强度", style = MaterialTheme.typography.titleSmall)
+              modelOptions.forEach { (pname, mname) ->
+                Text("$pname / $mname", Modifier.fillMaxWidth().clickable {
+                  thread {
+                    runCatching { client.selectModel(sessionId, pname, mname) }
+                    sheet = null
+                  }
+                }.padding(6.dp))
+              }
+            }
+            "perm" -> {
+              Text("权限预设", style = MaterialTheme.typography.titleSmall)
+              permOptions.forEach { (value, name) ->
+                Text(if (value == permCurrent) "✓ ${name.ifEmpty { value }}" else name.ifEmpty { value },
+                  Modifier.fillMaxWidth().clickable {
+                    thread {
+                      runCatching { client.permissionSet(sessionId, value) }
+                      permCurrent = value
+                      sheet = null
+                    }
+                  }.padding(6.dp))
+              }
+            }
+          }
+          OutlinedButton({ sheet = null }, Modifier.fillMaxWidth()) { Text("关闭") }
+        }
+      }
     }
     if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
     if (showToc) {
