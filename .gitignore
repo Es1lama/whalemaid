@@ -13,3 +13,4 @@ packages/android/.gradle/
 packages/android/build/
 packages/android/app/build/
 packages/android/local.properties
+.avd-home/

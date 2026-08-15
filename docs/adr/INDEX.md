@@ -42,6 +42,7 @@
 | ADR-039 | 前端策略 v2 | **移植 > 复刻**：官方 DSH web 前端（MIT）移植 + 移动/桌面适配 + 原生壳打包（Capacitor/Electron/Tauri），同源调用原生 /api 经网关打到受控端 | DESIGN §3 |
 | ADR-040 | 三端实体模型 | 受控端=能跑 DSH 的端+插件；服务端=流量转接（中继+账号分层）；主控端=控制 App（无需 DSH：PC/安卓/iOS/鸿蒙，同一移植前端打包）；控制是人对机，非 agent 对 agent | DESIGN §0 |
 | ADR-041 | 自定协议废止 | /api/v1 废止：主控端直用 DSH 原生 /api（经认证网关）；仅保留设备配对/管理最小端点并入网关；packages/control 废止 | DESIGN §5 |
+| ADR-042 | 连接流程（UU/ToDesk 式） | 受控端注册设备编号+密码哈希到服务端（服务端只知进程存在）→ 主控端握手拿设备列表 → 输设备编号+密码 → 服务端匹配 → 经中继连通；**用户不填任何 IP**（服务端地址仅 App 一次性配置）；直连模式降级为高级选项 | docs/native-app-plan.md |
 | ADR-032 | S2 结论 | rathole sidecar 定案：控制面写配置+托管子进程+热重载增删；每设备一 service+token；吊销=移除条目热重载；noise 加密+心跳 | research/spike-S2-S5 |
 | ADR-033 | S3 结论 | 设备密钥 = PWA WebCrypto ECDSA P-256 不可导出，IndexedDB 持久化；挑战-应答握手；重装即重新配对 | research/spike-S2-S5 |
 | ADR-034 | S4 结论 | 热词库走官方定制热词 HTTP API（vocabulary 增删改查 + 实时会话带 vocabulary_id）；BYOK 同机制 | research/spike-S2-S5 |
