@@ -2,8 +2,6 @@
 // 模型：浏览器无法开裸 TLS 隧道 → 每个请求经 WSS 隧道入口（SEC-004b web 变体）逐连接取 grant 转发。
 // 设备管理首屏（ToDesk 式：服务端地址+设备编号+密码，无 IP/端口/协议字样）+ 连接后反向代理宿主官方 UI/API/WS。
 import { createServer } from 'node:http'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import https from 'node:https'
 import WebSocket, { WebSocketServer } from 'ws'
@@ -12,14 +10,17 @@ const PORT = Number(process.env.CONTROLLER_PORT ?? 3210)
 const HOST_AUTHORITY = process.env.CONTROLLER_HOST_AUTHORITY ?? '127.0.0.1:3181' // 受控端宿主 web 权威（过官方信任栅栏用）
 
 /** 会话内存：已连接设备 + 密码（仅进程内存，不落盘；grant 单次消费故每次代理都要重签） */
-const session = { server: '', deviceId: '', password: '', fingerprint: '' }
+const session = { server: '', deviceId: '', password: '' }
 
 function json(res, status, obj) {
   res.writeHead(status, { 'content-type': 'application/json' })
   res.end(JSON.stringify(obj))
 }
 
-/** 调中继控制面（TLS + 证书指纹固定，SEC-001 同模型） */
+/** 中继证书指纹表（按服务端地址分别 TOFU，SEC-001 同模型） */
+const serverFingerprints = new Map()
+
+/** 调中继控制面（TLS + 证书指纹固定；任何异常都走 reject，绝不抛进程级错误） */
 function relayRequest(server, path, opts = {}) {
   return new Promise((resolve, reject) => {
     const r = https.request(`https://${server}${path}`, { method: opts.method ?? 'GET', headers: opts.headers ?? {}, rejectUnauthorized: false }, (res) => {
@@ -28,11 +29,19 @@ function relayRequest(server, path, opts = {}) {
       res.on('end', () => resolve({ status: res.statusCode, body: d }))
     })
     r.on('socket', (socket) => {
+      socket.on('error', (e) => { try { r.destroy() } catch {} reject(e) })
       socket.on('secureConnect', () => {
-        const cert = socket.getPeerCertificate(true)
-        const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
-        if (session.fingerprint && fp !== session.fingerprint) r.destroy(new Error('中继证书指纹变化，拒绝连接（防中间人）'))
-        if (!session.fingerprint) session.fingerprint = fp // 首次 TOFU
+        try {
+          const cert = socket.getPeerCertificate(true)
+          const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
+          const known = serverFingerprints.get(server)
+          if (known && fp !== known) {
+            r.destroy()
+            reject(new Error(`中继证书指纹变化（防中间人）：预期 ${known.slice(0, 12)}… 实际 ${fp.slice(0, 12)}…`))
+          } else if (!known) {
+            serverFingerprints.set(server, fp) // 首次 TOFU
+          }
+        } catch (e) { r.destroy(); reject(e) }
       })
     })
     r.on('error', reject)
@@ -219,7 +228,7 @@ server.on('upgrade', (req, socket, head) => {
     socket.on('data', (d) => { if (up.readyState === WebSocket.OPEN) up.send(d) })
     socket.on('close', () => up.close())
   }
-  void tunnel()
+  tunnel().catch((e) => { console.error('[whalemaid-controller] events 桥失败:', String(e)); socket.destroy() })
 })
 
 server.listen(PORT, '127.0.0.1', () => console.log(`[whalemaid-controller] http://127.0.0.1:${PORT}（Web 版主控端；服务端地址只在首次配置页出现，全程无 IP/端口字样）`))
