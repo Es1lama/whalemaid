@@ -2,8 +2,8 @@
 // SPEC: docs/security-audit.md#SEC-001/002/003 每设备独立凭据、argon2 密码哈希、隧道 token 轮换
 // SPEC: docs/adr/INDEX.md#ADR-032 每设备 = rathole 一个 service + token
 use anyhow::Result;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
+use scrypt::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use scrypt::Scrypt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -48,19 +48,21 @@ mod hex {
     }
 }
 
+/// SEC-002：scrypt 加盐慢哈希（PHC 字符串；参数显式 ln=14,r=8,p=1，Node 端 crypto.scryptSync(N=16384) 可生成同格式）
 pub fn hash_password(password: &str) -> Result<String> {
     let mut salt_bytes = [0u8; 16];
     getrandom::getrandom(&mut salt_bytes).map_err(|e| anyhow::anyhow!("{e}"))?;
     let salt = SaltString::encode_b64(&salt_bytes).map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+    let params = scrypt::Params::new(14, 8, 1, 32).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(Scrypt
+        .hash_password_customized(password.as_bytes(), None, None, params, &salt)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .to_string())
 }
 
 pub fn verify_password(password: &str, digest_str: &str) -> bool {
     PasswordHash::new(digest_str)
-        .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
+        .map(|h| Scrypt.verify_password(password.as_bytes(), &h).is_ok())
         .unwrap_or(false)
 }
 
@@ -212,6 +214,14 @@ mod tests {
         assert!(reg.verify_device_password("whale-test-bbbb", "correct").is_some());
         assert!(reg.verify_device_password("whale-test-bbbb", "wrong").is_none());
         assert!(reg.verify_device_password("ghost", "correct").is_none());
+    }
+
+    /// 跨语言一致性（SEC-002）：Node crypto.scryptSync(N=16384,r=8,p=1) 生成的 PHC 必须可验
+    #[test]
+    fn node_generated_phc_verifies() {
+        const NODE_PHC: &str = "$scrypt$ln=14,r=8,p=1$ASNFZ4mrze8BI0VniavN7w$5q49mzIigOxUr3OifkYPVkYBA/AkPMXgzQXNg+vWlLpmToAxmQQ4sT3VKMdSL3iUXO6ICEMbNMHRyKNB63QUHQ";
+        assert!(verify_password("pw123", NODE_PHC));
+        assert!(!verify_password("wrong", NODE_PHC));
     }
 
     #[test]

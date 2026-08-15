@@ -4,13 +4,16 @@ import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { generatePassword } from './device.js'
+import { generateDeviceId, generatePassword } from './device.js'
 
 export interface AuthorizedDevice {
   deviceId: string
   publicKeyJwk: JsonWebKey
   tokenDigest: string
   createdAt: number
+  /** SEC-004：会话 token 短 TTL + 滑动续期 */
+  expiresAt: number
+  lastUsedAt: number
   revoked: boolean
 }
 
@@ -23,6 +26,10 @@ export interface TempToken {
 
 export interface StoreState {
   longPassword: string
+  /** SEC-001/UX-002：受控端持久设备编号（WHALE-XXXX-XXXX） */
+  deviceId: string
+  /** 服务端签发的每设备凭据（自动注册后保存，SEC-001） */
+  relayCredential: string
   pendingNonces: Record<string, { deviceId: string; publicKeyJwk: JsonWebKey; expiresAt: number }>
   devices: AuthorizedDevice[]
   tempTokens: TempToken[]
@@ -30,6 +37,9 @@ export interface StoreState {
   tempPasswords: Array<{ password: string; expiresAt: number }>
   audit: Array<{ at: number; deviceId: string; method: string; ok: boolean }>
 }
+
+/** SEC-004：网关会话 token 有效期（滑动续期窗口） */
+export const TOKEN_TTL_MS = 10 * 60_000
 
 export function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
@@ -48,6 +58,8 @@ export class Store {
       ? (JSON.parse(readFileSync(this.path, 'utf8')) as StoreState)
       : {
           longPassword: this.newPassword(),
+          deviceId: generateDeviceId(),
+          relayCredential: '',
           pendingNonces: {},
           devices: [],
           tempTokens: [],
@@ -55,7 +67,9 @@ export class Store {
           audit: [],
         }
     this.state.tempPasswords ??= []
-    this.persist() // 初始状态（含生成的长期密码）立即落盘
+    this.state.relayCredential ??= ''
+    this.state.deviceId ??= generateDeviceId()
+    this.persist() // 初始状态（含生成的长期密码与设备编号）立即落盘
   }
 
   /** 长期密码生成在构造时完成；插件设置页可触发重新生成（重生成=全量吊销，REQ-002） */
@@ -73,6 +87,20 @@ export class Store {
 
   get file(): string {
     return this.path
+  }
+
+  /** UX-002：受控端设备编号（主界面展示） */
+  get deviceId(): string {
+    return this.state.deviceId
+  }
+
+  get relayCredential(): string {
+    return this.state.relayCredential
+  }
+
+  setRelayCredential(value: string): void {
+    this.state.relayCredential = value
+    this.persist()
   }
 
   rotatePassword(): string {
@@ -99,13 +127,16 @@ export class Store {
     return entry
   }
 
-  issueToken(deviceId: string): string {
+  issueToken(deviceId: string, ttlMs = TOKEN_TTL_MS): string {
     const token = randomBytes(32).toString('base64url')
+    const now = Date.now()
     this.state.devices.push({
       deviceId,
       publicKeyJwk: {} as JsonWebKey, // bind 时由路由回填
       tokenDigest: digest(token),
-      createdAt: Date.now(),
+      createdAt: now,
+      expiresAt: now + ttlMs,
+      lastUsedAt: now,
       revoked: false,
     })
     this.persist()
@@ -120,9 +151,17 @@ export class Store {
     }
   }
 
+  /** SEC-004：会话 token 校验——过期即失效，成功则滑动续期 */
   findDeviceByToken(token: string): AuthorizedDevice | undefined {
     const d = digest(token)
-    return this.state.devices.find((x) => x.tokenDigest === d && !x.revoked)
+    const dev = this.state.devices.find((x) => x.tokenDigest === d && !x.revoked)
+    if (!dev) return undefined
+    const now = Date.now()
+    if (dev.expiresAt <= now) return undefined
+    dev.lastUsedAt = now
+    dev.expiresAt = now + TOKEN_TTL_MS
+    this.persist()
+    return dev
   }
 
   /** 生成一次性/限时临时密码（REQ-003），默认 10 分钟 */

@@ -30,9 +30,10 @@ const DEFAULTS: Config = {
   visionCredentialRef: '',
   visionModel: '',
   relayUrl: '',
-  relayToken: '',
+  relayInstallCode: '',
   relayPort: 2333,
   ratholeBin: 'rathole',
+  allowPlainLan: false,
 }
 
 export function apply(ctx: Context, config?: Config): void {
@@ -73,6 +74,13 @@ export function apply(ctx: Context, config?: Config): void {
     ...(adapters.vision ? [CAPABILITIES.visionByok] : []),
   ]
 
+  // SEC-005：非回环明文监听默认拒绝（直连必须显式开启 allowPlainLan；默认路径走中继）
+  const lanBlocked = resolved.host !== '127.0.0.1' && !resolved.allowPlainLan
+  if (lanBlocked) {
+    ctx.logger.error(`[whalemaid] 拒绝以明文绑定 ${resolved.host}:${resolved.port}（SEC-005）：非回环监听需显式 allowPlainLan=true，或使用中继（relayUrl）`)
+    return
+  }
+
   const server = createWhalemaidServer({ store, verifier, apiProxy, hub, adapters, caps, host: resolved.host, port: resolved.port })
 
   ctx.logger.info(
@@ -93,16 +101,20 @@ export function apply(ctx: Context, config?: Config): void {
     ctx.logger.warn('[whalemaid] SSE 事件桥暂不可用（事件名未在宿主转发列表中）')
   }
 
-  // 中继接入（docs/deploy-server.md）：注册设备 → rathole 客户端 sidecar → 心跳
+  // 中继接入（docs/deploy-server.md）：安装码注册（设备编号+密码哈希）→ 隧道 → 凭据心跳
   const relay = resolved.relayUrl
     ? new RelayClient(
         {
           relayUrl: resolved.relayUrl,
-          relayToken: resolved.relayToken,
+          relayInstallCode: resolved.relayInstallCode,
           ratholeBin: resolved.ratholeBin,
           relayPort: resolved.relayPort,
           pluginPort: resolved.port,
           dataDir: store.file.replace(/store\.json$/, ''),
+          deviceId: store.deviceId,
+          longPassword: store.longPassword,
+          savedCredential: store.relayCredential,
+          onCredential: (c) => store.setRelayCredential(c),
         },
         (msg) => ctx.logger.info(msg),
       )
@@ -110,7 +122,7 @@ export function apply(ctx: Context, config?: Config): void {
   if (relay) {
     relay
       .start()
-      .then((b) => ctx.logger.info(`[whalemaid] 中继已接入 service=${b.service} port=${b.port}（手机经中继用该端口访问）`))
+      .then((b) => ctx.logger.info(`[whalemaid] 中继已接入 device=${store.deviceId} port=${b.port}（主控端用设备编号+密码连接，无需 IP）`))
       .catch((e) => ctx.logger.warn(`[whalemaid] 中继接入失败: ${e instanceof Error ? e.message : String(e)}`))
   }
 

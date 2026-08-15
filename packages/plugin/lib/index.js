@@ -67,11 +67,32 @@ import { homedir } from "node:os";
 
 // src/device.ts
 import { randomBytes } from "node:crypto";
+var ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function base32(bytes, groups) {
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  const size = groups[0] + groups[1];
+  for (const byte of bytes) {
+    value = value << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += ALPHABET[value >>> bits & 31];
+    }
+  }
+  return out.slice(0, size);
+}
+function generateDeviceId() {
+  const raw = base32(randomBytes(8), [4, 4]);
+  return `WHALE-${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
+}
 function generatePassword() {
   return randomBytes(9).toString("base64url").slice(0, 12);
 }
 
 // src/store.ts
+var TOKEN_TTL_MS = 10 * 6e4;
 function digest(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -84,6 +105,8 @@ var Store = class {
     mkdirSync(base, { recursive: true });
     this.state = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) : {
       longPassword: this.newPassword(),
+      deviceId: generateDeviceId(),
+      relayCredential: "",
       pendingNonces: {},
       devices: [],
       tempTokens: [],
@@ -91,6 +114,8 @@ var Store = class {
       audit: []
     };
     this.state.tempPasswords ??= [];
+    this.state.relayCredential ??= "";
+    this.state.deviceId ??= generateDeviceId();
     this.persist();
   }
   /** 长期密码生成在构造时完成；插件设置页可触发重新生成（重生成=全量吊销，REQ-002） */
@@ -105,6 +130,17 @@ var Store = class {
   }
   get file() {
     return this.path;
+  }
+  /** UX-002：受控端设备编号（主界面展示） */
+  get deviceId() {
+    return this.state.deviceId;
+  }
+  get relayCredential() {
+    return this.state.relayCredential;
+  }
+  setRelayCredential(value) {
+    this.state.relayCredential = value;
+    this.persist();
   }
   rotatePassword() {
     this.state.longPassword = this.newPassword();
@@ -127,14 +163,17 @@ var Store = class {
     this.persist();
     return entry;
   }
-  issueToken(deviceId) {
+  issueToken(deviceId, ttlMs = TOKEN_TTL_MS) {
     const token = randomBytes2(32).toString("base64url");
+    const now = Date.now();
     this.state.devices.push({
       deviceId,
       publicKeyJwk: {},
       // bind 时由路由回填
       tokenDigest: digest(token),
-      createdAt: Date.now(),
+      createdAt: now,
+      expiresAt: now + ttlMs,
+      lastUsedAt: now,
       revoked: false
     });
     this.persist();
@@ -147,9 +186,17 @@ var Store = class {
       this.persist();
     }
   }
+  /** SEC-004：会话 token 校验——过期即失效，成功则滑动续期 */
   findDeviceByToken(token) {
     const d = digest(token);
-    return this.state.devices.find((x) => x.tokenDigest === d && !x.revoked);
+    const dev = this.state.devices.find((x) => x.tokenDigest === d && !x.revoked);
+    if (!dev) return void 0;
+    const now = Date.now();
+    if (dev.expiresAt <= now) return void 0;
+    dev.lastUsedAt = now;
+    dev.expiresAt = now + TOKEN_TTL_MS;
+    this.persist();
+    return dev;
   }
   /** 生成一次性/限时临时密码（REQ-003），默认 10 分钟 */
   issueTemporaryPassword(ttlMs = 10 * 6e4) {
@@ -706,6 +753,12 @@ function createVisionAdapter(cfg, resolveKey) {
 import { spawn } from "node:child_process";
 import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
+import { randomBytes as randomBytes3, scryptSync } from "node:crypto";
+function phcScrypt(password, salt = randomBytes3(16)) {
+  const hash = scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+  const b64 = (b) => b.toString("base64").replace(/=+$/, "");
+  return `$scrypt$ln=14,r=8,p=1$${b64(salt)}$${b64(hash)}`;
+}
 var RelayClient = class {
   constructor(cfg, log) {
     this.cfg = cfg;
@@ -715,11 +768,37 @@ var RelayClient = class {
   timer;
   async start() {
     const base = this.cfg.relayUrl.replace(/\/$/, "");
-    const res = await fetch(`${base}/devices`, {
+    let credential = this.cfg.savedCredential;
+    if (!credential) {
+      const res = await fetch(`${base}/devices`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-install-code": this.cfg.relayInstallCode
+        },
+        body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) })
+      });
+      if (!res.ok) throw new Error(`\u6CE8\u518C\u5931\u8D25: ${res.status} ${await res.text()}`);
+      const reg = await res.json();
+      credential = reg.credential;
+      this.cfg.onCredential(credential);
+    }
+    const binding = await this.establishTunnel(base, credential);
+    this.timer = setInterval(() => {
+      fetch(`${base}/devices/${this.cfg.deviceId}/heartbeat`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${credential}` }
+      }).catch(() => void 0);
+    }, 2e4);
+    this.timer.unref();
+    return binding;
+  }
+  async establishTunnel(base, credential) {
+    const res = await fetch(`${base}/devices/${this.cfg.deviceId}/tunnel`, {
       method: "POST",
-      headers: { authorization: `Bearer ${this.cfg.relayToken}`, "content-type": "application/json" }
+      headers: { authorization: `Bearer ${credential}` }
     });
-    if (!res.ok) throw new Error(`\u4E2D\u7EE7\u6CE8\u518C\u5931\u8D25: ${res.status} ${await res.text()}`);
+    if (!res.ok) throw new Error(`\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
     const binding = await res.json();
     const host = new URL(base).hostname;
     const cfgText = [
@@ -727,7 +806,7 @@ var RelayClient = class {
       `remote_addr = "${host}:${this.cfg.relayPort}"`,
       "",
       `[client.services.${binding.service}]`,
-      `token = "${binding.token}"`,
+      `token = "${binding.tunnelToken}"`,
       `local_addr = "127.0.0.1:${this.cfg.pluginPort}"`,
       ""
     ].join("\n");
@@ -737,13 +816,6 @@ var RelayClient = class {
     writeFileSync2(cfgFile, cfgText, { mode: 384 });
     this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: "ignore" });
     this.child.on("exit", (code) => this.log(`[whalemaid] rathole \u5BA2\u6237\u7AEF\u9000\u51FA code=${code}`));
-    this.timer = setInterval(() => {
-      fetch(`${base}/devices/${binding.id}/heartbeat`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${this.cfg.relayToken}` }
-      }).catch(() => void 0);
-    }, 2e4);
-    this.timer.unref();
     return binding;
   }
   stop() {
@@ -766,9 +838,10 @@ var Config = Schema.object({
   visionCredentialRef: Schema.string().default(""),
   visionModel: Schema.string().default(""),
   relayUrl: Schema.string().default(""),
-  relayToken: Schema.string().default(""),
+  relayInstallCode: Schema.string().default(""),
+  ratholeBin: Schema.string().default("rathole"),
   relayPort: Schema.number().default(2333),
-  ratholeBin: Schema.string().default("rathole")
+  allowPlainLan: Schema.boolean().default(false)
 });
 
 // src/index.ts
@@ -785,9 +858,10 @@ var DEFAULTS = {
   visionCredentialRef: "",
   visionModel: "",
   relayUrl: "",
-  relayToken: "",
+  relayInstallCode: "",
   relayPort: 2333,
-  ratholeBin: "rathole"
+  ratholeBin: "rathole",
+  allowPlainLan: false
 };
 function apply(ctx, config) {
   const resolved = { ...DEFAULTS, ...config };
@@ -815,6 +889,11 @@ function apply(ctx, config) {
     ...adapters.voice ? [CAPABILITIES.voiceByok] : [],
     ...adapters.vision ? [CAPABILITIES.visionByok] : []
   ];
+  const lanBlocked = resolved.host !== "127.0.0.1" && !resolved.allowPlainLan;
+  if (lanBlocked) {
+    ctx.logger.error(`[whalemaid] \u62D2\u7EDD\u4EE5\u660E\u6587\u7ED1\u5B9A ${resolved.host}:${resolved.port}\uFF08SEC-005\uFF09\uFF1A\u975E\u56DE\u73AF\u76D1\u542C\u9700\u663E\u5F0F allowPlainLan=true\uFF0C\u6216\u4F7F\u7528\u4E2D\u7EE7\uFF08relayUrl\uFF09`);
+    return;
+  }
   const server = createWhalemaidServer({ store, verifier, apiProxy, hub, adapters, caps, host: resolved.host, port: resolved.port });
   ctx.logger.info(
     `[whalemaid] \u76D1\u542C http://${resolved.host}:${resolved.port} \uFF08\u8BBE\u5907 ID \u4E0E\u957F\u671F\u5BC6\u7801\u89C1 ${store.file}\uFF1B\u8BED\u97F3=${voiceCfg?.provider ?? "\u672A\u542F\u7528"} \u89C6\u89C9=${visionCfg?.provider ?? "\u672A\u542F\u7528"}\uFF09`
@@ -834,16 +913,20 @@ function apply(ctx, config) {
   const relay = resolved.relayUrl ? new RelayClient(
     {
       relayUrl: resolved.relayUrl,
-      relayToken: resolved.relayToken,
+      relayInstallCode: resolved.relayInstallCode,
       ratholeBin: resolved.ratholeBin,
       relayPort: resolved.relayPort,
       pluginPort: resolved.port,
-      dataDir: store.file.replace(/store\.json$/, "")
+      dataDir: store.file.replace(/store\.json$/, ""),
+      deviceId: store.deviceId,
+      longPassword: store.longPassword,
+      savedCredential: store.relayCredential,
+      onCredential: (c) => store.setRelayCredential(c)
     },
     (msg) => ctx.logger.info(msg)
   ) : null;
   if (relay) {
-    relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 service=${b.service} port=${b.port}\uFF08\u624B\u673A\u7ECF\u4E2D\u7EE7\u7528\u8BE5\u7AEF\u53E3\u8BBF\u95EE\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
+    relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 device=${store.deviceId} port=${b.port}\uFF08\u4E3B\u63A7\u7AEF\u7528\u8BBE\u5907\u7F16\u53F7+\u5BC6\u7801\u8FDE\u63A5\uFF0C\u65E0\u9700 IP\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
   }
   const muxCtl = new AbortController();
   void (async () => {

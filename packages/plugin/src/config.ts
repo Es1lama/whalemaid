@@ -19,9 +19,12 @@ export interface Config {
   visionModel: string
   /** 中继接入（'' = 未启用，见 docs/deploy-server.md） */
   relayUrl: string
-  relayToken: string
-  relayPort: number
+  /** SEC-001：服务端一次性安装码（受控端注册用） */
+  relayInstallCode: string
   ratholeBin: string
+  relayPort: number
+  /** SEC-005：允许非回环明文监听（默认拒绝；直连必须走中继或后续 TLS） */
+  allowPlainLan: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -35,7 +38,8 @@ export const Config: Schema<Config> = Schema.object({
   visionCredentialRef: Schema.string().default(''),
   visionModel: Schema.string().default(''),
   relayUrl: Schema.string().default(''),
-  relayToken: Schema.string().default(''),
-  relayPort: Schema.number().default(2333),
+  relayInstallCode: Schema.string().default(''),
   ratholeBin: Schema.string().default('rathole'),
+  relayPort: Schema.number().default(2333),
+  allowPlainLan: Schema.boolean().default(false),
 })

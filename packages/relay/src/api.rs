@@ -35,6 +35,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/devices", post(register).get(list))
         .route("/devices/:id", delete(revoke))
         .route("/devices/:id/heartbeat", post(heartbeat))
+        .route("/devices/:id/tunnel", post(tunnel))
         .route("/connect", post(connect))
         .with_state(state)
 }
@@ -123,6 +124,21 @@ async fn connect(State(s): State<Arc<AppState>>, headers: HeaderMap, body: Strin
         .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "error": "device not found" }))))?;
     reload_config(&s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
     Ok((StatusCode::OK, Json(json!({ "service": service, "port": port, "tunnelToken": token }))))
+}
+
+/// 被控端隧道签发：凭据鉴权，返回当前隧道 token（不轮换；轮换只在 /connect，SEC-003）
+async fn tunnel(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
+    let authorized = { s.registry.lock().await.authenticate_credential(cred).map(|d| d.id == id).unwrap_or(false) };
+    if !authorized {
+        return Err(unauthorized())
+    }
+    let (service, port, token) = {
+        let reg = s.registry.lock().await;
+        let dev = reg.active().find(|d| d.id == id).ok_or((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))?;
+        (dev.service.clone(), dev.port, dev.rathole_token.clone())
+    };
+    Ok((StatusCode::OK, Json(json!({ "id": id, "service": service, "port": port, "tunnelToken": token }))))
 }
 
 async fn list(State(s): State<Arc<AppState>>, headers: HeaderMap) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
