@@ -19,9 +19,7 @@
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.6",
-    "@whalemaid/contract": "workspace:*",
-    "@deepseek-ai/dsh-credentials": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.6"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

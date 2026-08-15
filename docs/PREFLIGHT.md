@@ -35,7 +35,7 @@
 | 5 | 威胁模型 v1 | `docs/threat-model.md`（TM-001..013） | ✅ |
 | 6 | 仓库骨架 | monorepo + AGPL-3.0 + SECURITY + 模板 + CI（已绿） | ✅ |
 
-### 实机测试结论（2026-08-15，独立实例 3181/3180，3080 会话本体全程无恙）
+### 实机测试结论（2026-08-15，独立实例 3181，3080 会话本体全程无恙）
 
 - 插件在真实 DSH host 挂载成功（`apply(ctx, config)` 惯例、`sessions` 复数签名、RpcRequest/RpcResponse 纪律透传）；
 - 接口级冒烟 7/7：handshake → 挑战应答绑定 → 网关拒无 token → session.list 真实透传 → 坏凭据拒绝 → browse 目录浏览 → 全盘范围策略拒绝；
@@ -46,7 +46,7 @@
 - ✅ REQ-003 临时密码（一次性/限时 + 短 TTL token，单测覆盖）；
 - ✅ REQ-008 permission.get/set 透传（projections 基线 + /permission 命令）；
 - ⬜ 主控端 App（ADR-039 移植前端）：官方前端独立构建 spike → Capacitor/Electron/Web 三壳 → 设备管理模块（ToDesk 式首屏）；旧自研移动 UI 已废止删除，不恢复；
-- ✅ 插件网关（自建 listener，选项 B）：handshake/绑定/会话/目录全链路透传（7/7）；`/m` 旧自研 PWA 静态服务已随清仓移除；
+- ✅ 受控端插件（audit#3 收尾）：不自建任何 listener——隧道直指宿主原生 web 端口（官方 /api+WS+UI 唯一载体）；设备自动注册+心跳+断线重连实测；自定 RPC/网关/PWA 已全部废止删除；
 - ⬜ SSE 事件桥：已注册 host/session-status，事件流量验证需主控端实测；
 - ⬜ workspace.create 冒烟已验证（8/8）；语音/视觉/热词 = V1 范围（REQ-020..022）；
 - ⬜ 精确 HistoryEntry 渲染与模型 provider 分组目录（骨架级提取，待对齐类型）。
@@ -55,7 +55,7 @@
 
 | # | 验证点 | 目的 |
 |---|---|---|
-| S0 | **直连模式**：DSH web 绑定 0.0.0.0 后，手机浏览器直连实测 | ✅ 静态：rc.6 CLI 拒绝 `--host 0.0.0.0` → 改**插件自建 listener（选项 B）**；直连 = 高级选项（ADR-042） | 
+| S0 | **承载选择**：手机浏览器直连宿主 web 实测 | ✅ 结论：rc.6 CLI 拒绝 `--host 0.0.0.0` 与自建 listener 路线均废止——受控端走中继隧道直达宿主原生 web（127.0.0.1 默认姿态），实测闭环 | 
 | S1 | DSH 插件注册 web 路由 + 调宿主 API（browse seam、`workspace.create`、`dsh-credentials`） | ✅ 静态：全部接口确认（见 research/spike-S0-S1.md）；实机待 M1 |
 | S2 | rathole（Rust）服务端/客户端实测：noise 握手、授权语义、sidecar 管理可行性 | ✅ sidecar 定案（热重载增删设备条目、吊销=移除条目）；ADR-032 |
 | S3 | PWA WebCrypto 密钥对：生成/持久化/不可导出 | ✅ 方案确认（ECDSA P-256 + IndexedDB + 挑战应答）；实机 M1；ADR-033 |

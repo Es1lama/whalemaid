@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
 # D-030 清仓守卫（audit#8）：废止语义禁止回潮——Kotlin/SwiftUI/全自研/Tauri/现行 /api/v1/packages/control
-# - 代码树（packages/ apps/）一律禁止；
-# - docs/ 允许带废止标记的历史记录行（含 废止|取代|删除|定案 之一），历史档案整档豁免；
-# - 临时豁免：packages/plugin/src/routes.ts 的 /api/v1 过渡实现（audit#3，随官方前端移植 spike 一并删除）。
+# - 代码树（packages/ apps/）一律禁止（/api/v1 已全链清除，无任何豁免）；
+# - *.md 允许带废止标记的历史记录行（含 废止|取代|删除|定案|禁止 之一），历史档案整档豁免。
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 PATTERN='Kotlin|SwiftUI|全自研|Tauri|/api/v1|packages/control'
 ALLOWLIST_DOCS='docs/OWNER-DIRECTIVES.md|docs/codex-audit.md'
-ALLOWLIST_CODE='packages/plugin/src/routes.ts'
 
 fail=0
 
 while IFS=: read -r file line text; do
   [ -z "$file" ] && continue
   if echo "$file" | grep -Eq "^($ALLOWLIST_DOCS)$"; then continue; fi
-  if echo "$file" | grep -Eq "^($ALLOWLIST_CODE)$"; then
-    echo "$text" | grep -q '/api/v1' && continue
-  fi
   if [[ "$file" == *.md ]]; then
     echo "$text" | grep -Eq '废止|取代|删除|定案|禁止' && continue
   fi

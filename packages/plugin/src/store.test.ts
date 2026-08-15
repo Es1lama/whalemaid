@@ -1,10 +1,10 @@
-// SPEC: docs/requirements.md#REQ-002/004 被控端设备与凭据单测
+// SPEC: docs/requirements.md#REQ-002 被控端设备与凭据单测（网关时代测试已随自定 RPC 废止删除，见 git 历史）
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { generateDeviceId, generateNonce, generatePassword } from './device.js'
-import { Store, digest } from './store.js'
+import { generateDeviceId, generatePassword } from './device.js'
+import { Store } from './store.js'
 
 /** 测试隔离：临时目录，不碰真实 ~/.dsh */
 function testStore(): Store {
@@ -26,38 +26,27 @@ describe('generatePassword', () => {
 })
 
 describe('Store', () => {
-  it('token 只存摘要；吊销后查找失效（TM-003/005）', () => {
+  it('初始即生成设备编号与长期密码并落盘（UX-001/002）', () => {
     const store = testStore()
-    const token = store.issueToken('WHALE-AAAA-BBBB')
-    expect(store.findDeviceByToken(token)?.deviceId).toBe('WHALE-AAAA-BBBB')
-    store.revokeDevice('WHALE-AAAA-BBBB')
-    expect(store.findDeviceByToken(token)).toBeUndefined()
+    expect(store.deviceId).toMatch(/^WHALE-/)
+    expect(store.longPassword).toHaveLength(12)
   })
 
-  it('nonce 一次性（TM-004）', () => {
+  it('中继凭据持久化（SEC-001）', () => {
     const store = testStore()
-    const jwk = { kty: 'EC', crv: 'P-256' } as JsonWebKey
-    const nonce = store.addNonce('WHALE-AAAA-BBBB', jwk)
-    expect(store.takeNonce(nonce)?.deviceId).toBe('WHALE-AAAA-BBBB')
-    expect(store.takeNonce(nonce)).toBeNull()
+    expect(store.relayCredential).toBe('')
+    store.setRelayCredential('cred-123')
+    // 重新加载同一目录（等价重启）仍可读回
+    const again = new Store(store.file.replace(/store\.json$/, ''))
+    expect(again.relayCredential).toBe('cred-123')
   })
 
-  it('digest 稳定', () => {
-    expect(digest('x')).toBe(digest('x'))
-  })
-
-  it('临时密码一次性且过期（REQ-003）', () => {
+  it('重生成密码清凭据触发重注册（REQ-002）', () => {
     const store = testStore()
-    const pw = store.issueTemporaryPassword()
-    expect(store.consumeTemporaryPassword(pw)).toBe(true)
-    expect(store.consumeTemporaryPassword(pw)).toBe(false) // 用过即焚
-    const pw2 = store.issueTemporaryPassword(0)
-    expect(store.consumeTemporaryPassword(pw2)).toBe(false) // 立即过期
-  })
-
-  it('临时 token 短 TTL 可验证（REQ-003）', () => {
-    const store = testStore()
-    const token = store.issueTemporaryToken('WHALE-AAAA-BBBB', 1000)
-    expect(store.findTemporaryToken(token)?.deviceId).toBe('WHALE-AAAA-BBBB')
+    store.setRelayCredential('cred-123')
+    const old = store.longPassword
+    const next = store.rotatePassword()
+    expect(next).not.toBe(old)
+    expect(store.relayCredential).toBe('') // 凭据清空 → 插件重注册上报新哈希
   })
 })

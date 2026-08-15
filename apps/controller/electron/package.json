@@ -1,0 +1,17 @@
+{
+  "name": "@whalemaid/controller-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WhaleMaid 主控端 Electron 壳（PC）：同源复用 controller-web（server.mjs 子进程 + BrowserWindow），UI 零改动（SPEC: docs/native-app-plan.md, D-025）",
+  "license": "AGPL-3.0",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "ELECTRON_RUN_AS_NODE=1 electron main.cjs --smoke",
+    "typecheck": "node --check main.cjs",
+    "test": "node --check main.cjs"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
