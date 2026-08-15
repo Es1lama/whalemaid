@@ -837,11 +837,26 @@ var RelayClient = class {
     mkdirSync2(dir, { recursive: true });
     const cfgFile = join2(dir, "rathole-client.toml");
     writeFileSync2(cfgFile, cfgText, { mode: 384 });
-    this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: "ignore" });
-    this.child.on("exit", (code) => this.log(`[whalemaid] rathole \u5BA2\u6237\u7AEF\u9000\u51FA code=${code}`));
+    let backoffMs = 1e3;
+    const spawnClient = () => {
+      this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: "ignore" });
+      this.child.on("exit", (code) => {
+        this.log(`[whalemaid] rathole \u5BA2\u6237\u7AEF\u9000\u51FA code=${code}\uFF0C${backoffMs}ms \u540E\u91CD\u8FDE\uFF08UX-012\uFF09`);
+        if (!this.stopped) {
+          setTimeout(spawnClient, backoffMs).unref();
+          backoffMs = Math.min(backoffMs * 2, 3e4);
+        }
+      });
+      setTimeout(() => {
+        backoffMs = 1e3;
+      }, 6e4).unref();
+    };
+    spawnClient();
     return binding;
   }
+  stopped = false;
   stop() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.child?.kill();
     this.child = null;
@@ -870,7 +885,7 @@ var Config = Schema.object({
 
 // src/index.ts
 var name = "whalemaid";
-var inject = ["apiProxy", "credentials"];
+var inject = ["apiProxy", "credentials", "webServer"];
 var DEFAULTS = {
   host: "127.0.0.1",
   port: 3180,
@@ -895,6 +910,7 @@ function apply(ctx, config) {
   const hub = new EventHub();
   const apiProxy = ctx.apiProxy;
   const credentials = ctx.credentials;
+  const hostWeb = ctx.webServer;
   const keyResolver = async (ref) => {
     if (!ref) return void 0;
     const hit = await credentials.resolve(credentialRef(ref));
@@ -945,7 +961,8 @@ function apply(ctx, config) {
       relayFingerprint: resolved.relayFingerprint,
       ratholeBin: resolved.ratholeBin,
       relayPort: resolved.relayPort,
-      pluginPort: resolved.port,
+      // 隧道目标 = 宿主原生 web 端口（官方 /api+WS+UI；127.0.0.1 默认安全姿态）；无宿主 web 时退回自建网关（过渡态）
+      pluginPort: hostWeb?.port ?? resolved.port,
       dataDir: store.file.replace(/store\.json$/, ""),
       deviceId: store.deviceId,
       longPassword: store.longPassword,
@@ -955,7 +972,7 @@ function apply(ctx, config) {
     (msg) => ctx.logger.info(msg)
   ) : null;
   if (relay) {
-    relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 device=${store.deviceId} port=${b.port}\uFF08\u4E3B\u63A7\u7AEF\u7528\u8BBE\u5907\u7F16\u53F7+\u5BC6\u7801\u8FDE\u63A5\uFF0C\u65E0\u9700 IP\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
+    relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 device=${store.deviceId} target=${hostWeb?.port ? `\u5BBF\u4E3B\u539F\u751Fweb:${hostWeb.port}` : `\u81EA\u5EFA\u7F51\u5173:${resolved.port}`}\uFF08\u4E3B\u63A7\u7AEF\u7528\u8BBE\u5907\u7F16\u53F7+\u5BC6\u7801\u8FDE\u63A5\uFF0C\u65E0\u9700 IP\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
   }
   const muxCtl = new AbortController();
   void (async () => {

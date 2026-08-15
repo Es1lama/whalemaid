@@ -14,7 +14,8 @@
   - 事件：`/api/events`（SSE，见 events.ts）；SSE 不通时客户端降级轮询；
   - 网关最小端点（设备配对/管理，网关自有命名）：`bind`/`handshake`/`list`/`revoke`/`heartbeat`（认证/语义见 PROTO-003/009）。
 - 直连与中继承载同一套 `/api` 语义（PROTO-004）；中继控制面在服务端 `/_whalemaid/*` 命名空间下（见 docs/deploy-server.md，与网关协议层无耦合）。
-- **迁移路径（过渡态，audit#3 执行中）**：插件当前仍保留 `/api/v1/<method>` 过渡实现（packages/plugin/src/routes.ts），随官方前端移植 spike 完成后一次性切到原生 `/api` 透传并删除过渡代码；CI 以禁止新代码使用 `/api/v1` 字面量阻断回潮。
+- **原生契约（已实测，2026-08-15）**：受控端宿主的 `dsh web` 服务（官方 web-app bundle）本身就是唯一 `/api` 载体——请求 `{type:"client-request", rpcId, method:"session.list", payload:{}}` → `{type:"server-response", rpcId, result:{ok,value|error}}`；WS 下联 `/api/events.mux` 与 `/api/events.host`；`GET /` 返回官方前端 + `window.__DSH_BOOT__` 注入。插件隧道 local_addr 直指宿主 web 端口（`ctx.get('webServer').port`），**不重造任何 RPC**（audit#3）。
+- **迁移路径（过渡态）**：插件内旧 `/api/v1` 自建 RPC 仅在宿主无 web 服务时兜底，随主控端 App 落地后连同 packages/contract 信封一并删除；CI 禁止新代码使用 `/api/v1` 字面量阻断回潮。
 
 ## PROTO-002 capability 广播
 
@@ -92,4 +93,4 @@
 | `device.revoke` | 吊销 device_token（REQ-004） | Bearer + 密码 |
 | `device.heartbeat` | 在线状态保活（TM-005） | Bearer |
 
-服务端连接流程（ADR-042，UU/ToDesk 式，**用户不填任何 IP**）：受控端注册设备编号+密码哈希 → 主控端 `/_whalemaid/connect`（编号+密码，限速/锁定）→ 服务端返回寻址 → 主控端经 rathole 隧道连到受控端网关 → 网关侧按本表完成挑战应答绑定 → 进入 `/api` 原生会话。
+服务端连接流程（ADR-042，UU/ToDesk 式，**用户不填任何 IP**）：受控端注册设备编号+密码哈希 → 主控端 `/_whalemaid/connect`（编号+密码，限速/锁定）→ 服务端签发**单连接一次性 grant**（2min）→ 主控端 TLS 连隧道入口发 `GRANT <grant> <deviceId>` → 进入 rathole noise 隧道 → 受控端宿主原生 `/api`（官方信封+官方信任栅栏，浏览器同源头）+ 官方前端（`__DSH_BOOT__`）。**断线重连 = 重新 /connect 取新 grant**（grant 单次消费）；同一隧道连接上可跑完整会话（含 WS 下联）。主控端 WebView 须以受控端宿主的权威（如 `http://127.0.0.1:<web端口>`）呈现请求头，或在宿主 `--trusted-host` 显式加入主控端权威。

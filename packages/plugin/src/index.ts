@@ -13,7 +13,7 @@ import { RelayClient } from './relay.js'
 
 export const name = 'whalemaid'
 
-export const inject = ['apiProxy', 'credentials']
+export const inject = ['apiProxy', 'credentials', 'webServer']
 
 export { Config } from './config.js'
 import type { Config } from './config.js'
@@ -46,6 +46,9 @@ export function apply(ctx: Context, config?: Config): void {
   const credentials = (ctx as unknown as {
     credentials: { resolve(ref: ReturnType<typeof credentialRef>): Promise<{ value: string } | undefined> }
   }).credentials
+  // audit#3（D-022 原生同源透传）：宿主自带的 web 服务就是官方 /api + WS 下联 + 前端 UI 的唯一载体——
+  // 隧道 local_addr 直指该端口，受控端不重造任何 RPC（实测：POST /api/session.list 官方信封 200）
+  const hostWeb = (ctx as unknown as { webServer?: { port?: number; host?: string } }).webServer
 
   /** BYOK key 解析：dsh-credentials 每操作即时解析（ADR-013），引用名为空时不解析 */
   const keyResolver = async (ref: string): Promise<string | undefined> => {
@@ -115,7 +118,8 @@ export function apply(ctx: Context, config?: Config): void {
           relayFingerprint: resolved.relayFingerprint,
           ratholeBin: resolved.ratholeBin,
           relayPort: resolved.relayPort,
-          pluginPort: resolved.port,
+          // 隧道目标 = 宿主原生 web 端口（官方 /api+WS+UI；127.0.0.1 默认安全姿态）；无宿主 web 时退回自建网关（过渡态）
+          pluginPort: hostWeb?.port ?? resolved.port,
           dataDir: store.file.replace(/store\.json$/, ''),
           deviceId: store.deviceId,
           longPassword: store.longPassword,
@@ -128,7 +132,7 @@ export function apply(ctx: Context, config?: Config): void {
   if (relay) {
     relay
       .start()
-      .then((b) => ctx.logger.info(`[whalemaid] 中继已接入 device=${store.deviceId} port=${b.port}（主控端用设备编号+密码连接，无需 IP）`))
+      .then((b) => ctx.logger.info(`[whalemaid] 中继已接入 device=${store.deviceId} target=${hostWeb?.port ? `宿主原生web:${hostWeb.port}` : `自建网关:${resolved.port}`}（主控端用设备编号+密码连接，无需 IP）`))
       .catch((e) => ctx.logger.warn(`[whalemaid] 中继接入失败: ${e instanceof Error ? e.message : String(e)}`))
   }
 

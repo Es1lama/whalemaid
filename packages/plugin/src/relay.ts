@@ -164,12 +164,28 @@ export class RelayClient {
     mkdirSync(dir, { recursive: true })
     const cfgFile = join(dir, 'rathole-client.toml')
     writeFileSync(cfgFile, cfgText, { mode: 0o600 })
-    this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: 'ignore' })
-    this.child.on('exit', (code) => this.log(`[whalemaid] rathole 客户端退出 code=${code}`))
+    // UX-012/013 断线重连：客户端退出即指数退避重启（上限 30s），stop() 才终止
+    let backoffMs = 1000
+    const spawnClient = () => {
+      this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: 'ignore' })
+      this.child.on('exit', (code) => {
+        this.log(`[whalemaid] rathole 客户端退出 code=${code}，${backoffMs}ms 后重连（UX-012）`)
+        if (!this.stopped) {
+          setTimeout(spawnClient, backoffMs).unref()
+          backoffMs = Math.min(backoffMs * 2, 30_000)
+        }
+      })
+      // 客户端稳定运行一段时间后重置退避
+      setTimeout(() => { backoffMs = 1000 }, 60_000).unref()
+    }
+    spawnClient()
     return binding
   }
 
+  private stopped = false
+
   stop(): void {
+    this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.child?.kill()
     this.child = null
