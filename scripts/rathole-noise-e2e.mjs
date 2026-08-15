@@ -8,22 +8,45 @@ import { scryptSync, randomBytes } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
+import { createHash } from 'node:crypto'
 import tls from 'node:tls'
 
 const RELAY = 'https://127.0.0.1:9180'
 const RATHOLE = '/Users/zz/Desktop/ws/Code/programs/dpsk-far/whalemaid/.toolchain/rathole/rathole'
 const CFG_DIR = '/Users/zz/Desktop/ws/Code/programs/dpsk-far/whalemaid/.tmp/tunnel-e2e'
 
+/** 服务端证书 SHA-256 指纹（TOFU 固定值；审计#2：E2E 必须校验，不许裸 rejectUnauthorized） */
+let SERVER_FINGERPRINT = ''
+const getServerFingerprint = () => new Promise((resolve, reject) => {
+  const sock = tls.connect({ host: '127.0.0.1', port: 9180, rejectUnauthorized: false }, () => {
+    const cert = sock.getPeerCertificate(true)
+    const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
+    sock.destroy()
+    resolve(fp)
+  })
+  sock.on('error', reject)
+})
+
 const req = (path, opts = {}) => new Promise((resolve, reject) => {
   const r = https.request(RELAY + path, { method: opts.method ?? 'GET', headers: opts.headers ?? {}, rejectUnauthorized: false }, (res) => {
     let d = ''; res.on('data', (c) => d += c); res.on('end', () => resolve({ status: res.statusCode, body: d }))
+  })
+  r.on('socket', (socket) => {
+    socket.on('secureConnect', () => {
+      const cert = socket.getPeerCertificate(true)
+      const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
+      if (fp !== SERVER_FINGERPRINT) r.destroy(new Error(`TLS 指纹不匹配（预期 ${SERVER_FINGERPRINT.slice(0, 12)}… 实际 ${fp.slice(0, 12)}…）`))
+    })
   })
   r.on('error', reject); if (opts.body) r.write(opts.body); r.end()
 })
 
 /** TLS 隧道入口：发 GRANT 行后把 HTTP 请求当字节流打过去，读回响应 */
-const viaTunnel = (grant, deviceId, httpText) => new Promise((resolve) => {
+const viaTunnel = (grant, deviceId, httpText, expectFp = SERVER_FINGERPRINT) => new Promise((resolve) => {
   const sock = tls.connect({ host: '127.0.0.1', port: 9443, rejectUnauthorized: false }, () => {
+    const cert = sock.getPeerCertificate(true)
+    const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
+    if (fp !== expectFp) { sock.destroy(); resolve('FINGERPRINT-MISMATCH'); return }
     sock.write(`GRANT ${grant} ${deviceId}\n${httpText}`)
   })
   let data = ''
@@ -43,6 +66,9 @@ const phc = (pw) => {
   const b64 = (b) => b.toString('base64').replace(/=+$/, '')
   return `$scrypt$ln=14,r=8,p=1$${b64(salt)}$${b64(dk)}`
 }
+
+SERVER_FINGERPRINT = await getServerFingerprint()
+console.log('server-fingerprint:', SERVER_FINGERPRINT.slice(0, 16) + '…')
 
 const DEVICE = 'WHALE-GRANT-0001'
 const reg = await req('/_whalemaid/devices', { method: 'POST', headers: { 'content-type': 'application/json', 'x-install-code': 'e2e-install' }, body: JSON.stringify({ deviceId: DEVICE, passwordDigest: await phc('pw-grant-e2e') }) })
@@ -83,6 +109,11 @@ if (reuse.includes('echo:')) process.exit(1)
 const forge = await viaTunnel('0'.repeat(32), DEVICE, httpGet)
 console.log('grant-forge:', forge.includes('echo:') ? 'FAIL(伪造成功!)' : 'PASS(拒绝)')
 if (forge.includes('echo:')) process.exit(1)
+
+// 攻击路径（审计#2）：错误 TLS 指纹 → 客户端必须拒绝
+const badFp = await viaTunnel('0'.repeat(32), DEVICE, httpGet, '0'.repeat(64))
+console.log('wrong-fingerprint:', badFp === 'FINGERPRINT-MISMATCH' ? 'PASS(拒绝)' : 'FAIL(未拒绝!)')
+if (badFp !== 'FINGERPRINT-MISMATCH') process.exit(1)
 
 // 攻击路径：错误 noise 公钥 → 握手失败（pin 生效）
 writeFileSync(CFG_DIR + '/bad.toml', renderClient('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='))

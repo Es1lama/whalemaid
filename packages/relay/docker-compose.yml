@@ -5,11 +5,13 @@ services:
       context: ../..
       dockerfile: packages/relay/Dockerfile
     ports:
-      - "2333:2333" # rathole 设备隧道（手机/被控端经此转发）
-      - "9080:9080" # 控制面管理 API（生产建议防火墙限源或改绑内网）
+      - "2333:2333" # rathole 设备隧道（受控端 sidecar 连这里，noise）
+      - "9080:9080" # 控制面管理 API（TLS；生产建议防火墙限源）
+      - "9443:9443" # 主控端隧道入口（TLS + 一次性 grant；SEC-004b）
     environment:
       - ADMIN_TOKEN=${ADMIN_TOKEN:?请设置管理密钥}
       - WHALEMAID_RELAY_LISTEN=0.0.0.0:9080
+      - WHALEMAID_RELAY_TUNNEL_LISTEN=0.0.0.0:9443
       - WHALEMAID_RELAY_DATA=/data
     volumes:
       - whalemaid-data:/data

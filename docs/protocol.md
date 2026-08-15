@@ -8,10 +8,10 @@
 
 ## PROTO-001 传输与承载
 
-- 承载：HTTP(S) 请求 + SSE 事件流。WebSocket 留 V2。
-- **现行端点（ADR-041）**：
-  - 业务：`/api/**` —— DSH 原生 API，同源透传（`toFetchHandler(ctx.apiProxy)`），信封即 DSH 原生 wire 契约（`{ rpcId, result: { ok, value | error } }`），前端调用点零改动；
-  - 事件：`/api/events`（SSE，见 events.ts）；SSE 不通时客户端降级轮询；
+- 承载：HTTP(S) 请求 + **WebSocket 事件下联**（官方 web 载体实测；SSE 非现行承载）。
+- **现行端点（ADR-041，2026-08-15 实测）**：
+  - 业务：`/api/**` —— DSH 原生 API，同源透传（`toFetchHandler(ctx.apiProxy)`），信封即官方 wire 契约 `{type:"client-request", rpcId, method, payload}` → `{type:"server-response", rpcId, result:{ok,value|error}}`，前端调用点零改动；
+  - 事件：WebSocket `/api/events.mux`（审批/请求帧）与 `/api/events.host`（宿主帧）；
   - 网关最小端点（设备配对/管理，网关自有命名）：`bind`/`handshake`/`list`/`revoke`/`heartbeat`（认证/语义见 PROTO-003/009）。
 - 直连与中继承载同一套 `/api` 语义（PROTO-004）；中继控制面在服务端 `/_whalemaid/*` 命名空间下（见 docs/deploy-server.md，与网关协议层无耦合）。
 - **原生契约（已实测，2026-08-15）**：受控端宿主的 `dsh web` 服务（官方 web-app bundle）本身就是唯一 `/api` 载体——请求 `{type:"client-request", rpcId, method:"session.list", payload:{}}` → `{type:"server-response", rpcId, result:{ok,value|error}}`；WS 下联 `/api/events.mux` 与 `/api/events.host`；`GET /` 返回官方前端 + `window.__DSH_BOOT__` 注入。插件隧道 local_addr 直指宿主 web 端口（`ctx.get('webServer').port`），**不重造任何 RPC**（audit#3）。

@@ -27,6 +27,10 @@ async fn main() -> Result<()> {
     if let Ok(v) = std::env::var("WHALEMAID_RELAY_RATHOLE_BIN") {
         config.rathole_bin = PathBuf::from(&v);
     }
+    // 公网部署：显式绑 0.0.0.0:9443（默认回环，防误暴露——SEC-004b 审计#1）
+    if let Ok(v) = std::env::var("WHALEMAID_RELAY_TUNNEL_LISTEN") {
+        config.tunnel_listen = v;
+    }
     let admin_token = std::env::var("ADMIN_TOKEN").unwrap_or_default();
     let install_code = std::env::var("ADMIN_INSTALL_CODE").unwrap_or_default();
 

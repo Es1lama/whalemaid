@@ -27,6 +27,7 @@ done < <(
   grep -rInE "$PATTERN" packages apps docs \
     --include='*.ts' --include='*.tsx' --include='*.rs' \
     --include='*.md' --include='*.json' --include='*.yml' --include='*.yaml' \
+    --include='pnpm-lock.yaml' --include='Dockerfile' \
     2>/dev/null \
     | grep -v node_modules | grep -v '/lib/' | grep -v '/target/' | grep -v '/dist/' \
     || true

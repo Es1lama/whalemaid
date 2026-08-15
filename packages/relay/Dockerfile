@@ -18,5 +18,5 @@ RUN curl -sSL -o /tmp/rathole.zip \
 COPY --from=build /src/target/release/whalemaid-relay /usr/local/bin/whalemaid-relay
 ENV WHALEMAID_RELAY_DATA=/data
 RUN mkdir -p /data
-EXPOSE 2333 9080
+EXPOSE 2333 9080 9443
 ENTRYPOINT ["whalemaid-relay"]

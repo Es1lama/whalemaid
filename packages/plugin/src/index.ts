@@ -7,7 +7,7 @@ import { Store } from './store.js'
 import { PasswordVerifier } from './verifier.js'
 import { EventHub } from './events.js'
 import { createWhalemaidServer, type HostApiProxy } from './routes.js'
-import { createVoiceAdapter } from './providers/voice.js'
+import { createVoiceAdapter, voiceProviderVerified } from './providers/voice.js'
 import { createVisionAdapter } from './providers/vision.js'
 import { RelayClient } from './relay.js'
 
@@ -74,7 +74,8 @@ export function apply(ctx: Context, config?: Config): void {
     CAPABILITIES.workspaceCreate,
     CAPABILITIES.directoryBrowse,
     CAPABILITIES.direct,
-    ...(adapters.voice ? [CAPABILITIES.voiceByok] : []),
+    // audit#7：只有真实可用的 provider 才广播能力位（dashscope 未经真实 key 验收，不广播）
+    ...(adapters.voice && voiceProviderVerified(resolved.voiceProvider) ? [CAPABILITIES.voiceByok] : []),
     ...(adapters.vision ? [CAPABILITIES.visionByok] : []),
   ]
 

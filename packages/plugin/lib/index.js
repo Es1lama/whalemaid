@@ -598,6 +598,9 @@ function createWhalemaidServer(deps) {
 }
 
 // src/providers/voice.ts
+function voiceProviderVerified(provider) {
+  return provider !== VOICE_PROVIDERS.dashscope;
+}
 function requireKey(key, provider) {
   if (!key) throw new Error(`\u7F3A\u5C11 ${provider} \u51ED\u636E\uFF1A\u8BF7\u5728\u5BBF\u4E3B dsh-credentials \u914D\u7F6E\u5BF9\u5E94 API key`);
   return key;
@@ -927,7 +930,8 @@ function apply(ctx, config) {
     CAPABILITIES.workspaceCreate,
     CAPABILITIES.directoryBrowse,
     CAPABILITIES.direct,
-    ...adapters.voice ? [CAPABILITIES.voiceByok] : [],
+    // audit#7：只有真实可用的 provider 才广播能力位（dashscope 未经真实 key 验收，不广播）
+    ...adapters.voice && voiceProviderVerified(resolved.voiceProvider) ? [CAPABILITIES.voiceByok] : [],
     ...adapters.vision ? [CAPABILITIES.visionByok] : []
   ];
   const lanBlocked = resolved.host !== "127.0.0.1" && !resolved.allowPlainLan;

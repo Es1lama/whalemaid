@@ -6,6 +6,11 @@ export interface VoiceAdapter {
   transcribe(audio: Buffer, format: string): Promise<string>
 }
 
+/** audit#7：dashscope 路径未经真实 key 验收——不对外广播能力位，配置了也只对 OpenAI 兼容系生效 */
+export function voiceProviderVerified(provider: string): boolean {
+  return provider !== VOICE_PROVIDERS.dashscope
+}
+
 export type KeyResolver = () => Promise<string | undefined>
 
 function requireKey(key: string | undefined, provider: string): string {
