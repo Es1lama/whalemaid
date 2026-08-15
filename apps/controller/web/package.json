@@ -1,0 +1,16 @@
+{
+  "name": "@whalemaid/controller-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WhaleMaid 主控端（Web/Electron 同源）：官方 DSH 前端经中继隧道反向代理 + ToDesk 式设备管理（SPEC: docs/native-app-plan.md）",
+  "license": "AGPL-3.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "node --check server.mjs",
+    "test": "node --check server.mjs",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

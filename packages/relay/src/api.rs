@@ -6,8 +6,11 @@ use crate::limiter::{Attempt, Limiter};
 use crate::rathole::{render_server_config, RatholeSidecar};
 use crate::registry::Registry;
 use axum::{
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    response::IntoResponse,
     extract::State,
     http::{HeaderMap, StatusCode},
+    response::Response,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -44,6 +47,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_whalemaid/devices/:id/status", get(device_status))
         .route("/_whalemaid/devices/:id/tunnel", post(tunnel))
         .route("/_whalemaid/connect", post(connect))
+        .route("/_whalemaid/tunnel-ws", get(tunnel_ws))
         .with_state(state)
 }
 
@@ -204,4 +208,60 @@ async fn revoke(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extrac
     let found = s.registry.lock().await.revoke(&id);
     reload_config(&s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
     Ok((StatusCode::OK, Json(json!({ "revoked": found }))))
+}
+
+/// SEC-004b Web 变体（主控端 Web/Electron/Capacitor 统一入口，audit#6）：
+/// 浏览器无法开裸 TLS 隧道，故经 WSS 承载同一条 grant 管道——首个文本帧 `GRANT <token> <deviceId>`，
+/// 之后帧 = 原始字节（HTTP 请求等），双工转发到受控端 rathole 服务端口。限速 + 单次消费 + 设备绑定同裸 TLS 入口。
+async fn tunnel_ws(State(s): State<Arc<AppState>>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+    let ip = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+    if s.limiter.lock().await.check(&format!("tunnelws:{ip}")) != Attempt::Allowed {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))).into_response()
+    }
+    ws.on_upgrade(move |socket| ws_tunnel_session(s, socket))
+}
+
+async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
+
+    // 首帧 = GRANT 行（10s 超时）
+    let grant_line = match tokio::time::timeout(std::time::Duration::from_secs(10), socket.recv()).await {
+        Ok(Some(Ok(Message::Text(t)))) => t,
+        _ => return,
+    };
+    let parts: Vec<&str> = grant_line.split_whitespace().collect();
+    if parts.len() != 3 || parts[0] != "GRANT" {
+        return;
+    }
+    let Some(port) = state.grants.lock().await.consume(parts[1], parts[2]) else {
+        return;
+    };
+    let Ok(mut backend) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
+        return;
+    };
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // 单任务 select 双工泵（避免半连接别名借用）：ws 帧 ↔ tcp 字节
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        tokio::select! {
+            msg = socket.recv() => {
+                let r = match msg {
+                    Some(Ok(Message::Binary(d))) => backend.write_all(&d).await,
+                    Some(Ok(Message::Text(d))) => backend.write_all(d.as_bytes()).await,
+                    Some(Ok(Message::Ping(_))) => { let _ = socket.send(Message::Pong(vec![])).await; continue }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => break,
+                };
+                if r.is_err() { break }
+            }
+            n = backend.read(&mut buf) => {
+                match n {
+                    Ok(0) => break,
+                    Ok(n) => { if socket.send(Message::Binary(buf[..n].to_vec())).await.is_err() { break } }
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    let _ = socket.close().await;
 }

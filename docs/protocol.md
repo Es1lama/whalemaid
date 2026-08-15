@@ -93,4 +93,6 @@
 | `device.revoke` | 吊销 device_token（REQ-004） | Bearer + 密码 |
 | `device.heartbeat` | 在线状态保活（TM-005） | Bearer |
 
-服务端连接流程（ADR-042，UU/ToDesk 式，**用户不填任何 IP**）：受控端注册设备编号+密码哈希 → 主控端 `/_whalemaid/connect`（编号+密码，限速/锁定）→ 服务端签发**单连接一次性 grant**（2min）→ 主控端 TLS 连隧道入口发 `GRANT <grant> <deviceId>` → 进入 rathole noise 隧道 → 受控端宿主原生 `/api`（官方信封+官方信任栅栏，浏览器同源头）+ 官方前端（`__DSH_BOOT__`）。**断线重连 = 重新 /connect 取新 grant**（grant 单次消费）；同一隧道连接上可跑完整会话（含 WS 下联）。主控端 WebView 须以受控端宿主的权威（如 `http://127.0.0.1:<web端口>`）呈现请求头，或在宿主 `--trusted-host` 显式加入主控端权威。
+服务端连接流程（ADR-042，UU/ToDesk 式，**用户不填任何 IP**）：受控端注册设备编号+密码哈希 → 主控端 `/_whalemaid/connect`（编号+密码，限速/锁定）→ 服务端签发**单连接一次性 grant**（2min）→ 主控端经隧道入口进入 rathole noise 隧道 → 受控端宿主原生 `/api`（官方信封+官方信任栅栏，浏览器同源头）+ 官方前端（`__DSH_BOOT__`）。**断线重连 = 重新 /connect 取新 grant**（grant 单次消费）；同一隧道连接上可跑完整会话（含 WS 下联）。主控端 WebView 须以受控端宿主的权威（如 `http://127.0.0.1:<web端口>`）呈现请求头，或在宿主 `--trusted-host` 显式加入主控端权威。
+
+**隧道入口两形态（SEC-004b）**：① 裸 TLS（`tls://<中继>:9443`，首行 `GRANT <grant> <deviceId>`）——原生壳（Electron/Capacitor 原生层）用；② WSS（`wss://<中继>/_whalemaid/tunnel-ws`，首帧 `GRANT <grant> <deviceId>`）——浏览器/WebView 用（Web 版主控端逐请求签 grant 转发，apps/controller/web/server.mjs 已实测闭环）。

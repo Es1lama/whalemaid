@@ -1,0 +1,10 @@
+{
+  "source": "https://github.com/deepseek-ai/deepseek-harness",
+  "path": "apps/web",
+  "commit": "47f943859bef60e4160492346772ded9b24f765a",
+  "package": "@deepseek-ai/dsh-web-frontend@0.1.0-rc.5",
+  "builtAt": "2026-08-15",
+  "build": ["pnpm install", "pnpm build:lib", "pnpm --filter @deepseek-ai/dsh-web-frontend build"],
+  "license": "MIT (repo root)",
+  "modified": false
+}

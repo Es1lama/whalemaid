@@ -131,10 +131,20 @@ export function apply(ctx: Context, config?: Config): void {
       )
     : null
   if (relay) {
-    relay
-      .start()
-      .then((b) => ctx.logger.info(`[whalemaid] 中继已接入 device=${store.deviceId} target=${hostWeb?.port ? `宿主原生web:${hostWeb.port}` : `自建网关:${resolved.port}`}（主控端用设备编号+密码连接，无需 IP）`))
-      .catch((e) => ctx.logger.warn(`[whalemaid] 中继接入失败: ${e instanceof Error ? e.message : String(e)}`))
+    // UX-001：启动即注册——中继暂不可达时指数退避重试（2s→60s，永续），不依赖用户操作
+    let attempt = 0
+    const tryStart = async () => {
+      try {
+        const b = await relay!.start()
+        ctx.logger.info(`[whalemaid] 中继已接入 device=${store.deviceId} target=${hostWeb?.port ? `宿主原生web:${hostWeb.port}` : `自建网关:${resolved.port}`}（主控端用设备编号+密码连接，无需 IP）`)
+      } catch (e) {
+        attempt += 1
+        const delay = Math.min(2000 * 2 ** attempt, 60_000)
+        ctx.logger.warn(`[whalemaid] 中继接入失败（第 ${attempt} 次）: ${e instanceof Error ? e.message : String(e)}；${Math.round(delay / 1000)}s 后重试`)
+        setTimeout(tryStart, delay).unref()
+      }
+    }
+    void tryStart()
   }
 
   // 审批桥（REQ-008 原生审批流）：消费 dsh mux 流，转发 approval/requested|resolved 到 SSE

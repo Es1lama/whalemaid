@@ -12,6 +12,12 @@ importers:
         specifier: ^0.21.5
         version: 0.21.5
 
+  apps/controller/web:
+    dependencies:
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.3
+
   packages/contract:
     devDependencies:
       typescript:

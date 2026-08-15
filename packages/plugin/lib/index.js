@@ -976,7 +976,19 @@ function apply(ctx, config) {
     (msg) => ctx.logger.info(msg)
   ) : null;
   if (relay) {
-    relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 device=${store.deviceId} target=${hostWeb?.port ? `\u5BBF\u4E3B\u539F\u751Fweb:${hostWeb.port}` : `\u81EA\u5EFA\u7F51\u5173:${resolved.port}`}\uFF08\u4E3B\u63A7\u7AEF\u7528\u8BBE\u5907\u7F16\u53F7+\u5BC6\u7801\u8FDE\u63A5\uFF0C\u65E0\u9700 IP\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
+    let attempt = 0;
+    const tryStart = async () => {
+      try {
+        const b = await relay.start();
+        ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 device=${store.deviceId} target=${hostWeb?.port ? `\u5BBF\u4E3B\u539F\u751Fweb:${hostWeb.port}` : `\u81EA\u5EFA\u7F51\u5173:${resolved.port}`}\uFF08\u4E3B\u63A7\u7AEF\u7528\u8BBE\u5907\u7F16\u53F7+\u5BC6\u7801\u8FDE\u63A5\uFF0C\u65E0\u9700 IP\uFF09`);
+      } catch (e) {
+        attempt += 1;
+        const delay = Math.min(2e3 * 2 ** attempt, 6e4);
+        ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25\uFF08\u7B2C ${attempt} \u6B21\uFF09: ${e instanceof Error ? e.message : String(e)}\uFF1B${Math.round(delay / 1e3)}s \u540E\u91CD\u8BD5`);
+        setTimeout(tryStart, delay).unref();
+      }
+    };
+    void tryStart();
   }
   const muxCtl = new AbortController();
   void (async () => {

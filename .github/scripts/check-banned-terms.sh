@@ -30,6 +30,7 @@ done < <(
     --include='pnpm-lock.yaml' --include='Dockerfile' \
     2>/dev/null \
     | grep -v node_modules | grep -v '/lib/' | grep -v '/target/' | grep -v '/dist/' \
+    | grep -v '/vendor-dist/' \
     || true
 )
 
