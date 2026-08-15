@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>WhaleMaid 主控端</title><style>
+body{font-family:system-ui,-apple-system,'PingFang SC',sans-serif;background:#0f1115;color:#e6e8eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.card{width:min(92vw,380px);background:#181b21;border:1px solid #262a33;border-radius:14px;padding:28px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#8b93a1;font-size:13px;margin:0 0 20px}
+label{display:block;font-size:13px;color:#9aa3b2;margin:14px 0 6px}
+input{width:100%;box-sizing:border-box;background:#0f1115;border:1px solid #2c313d;color:#e6e8eb;border-radius:8px;padding:11px 12px;font-size:15px}
+input:focus{outline:none;border-color:#4c7dff}
+button{width:100%;margin-top:22px;background:#4c7dff;border:0;color:#fff;border-radius:8px;padding:12px;font-size:15px;cursor:pointer}
+button:disabled{opacity:.5}
+#status{margin-top:14px;font-size:13px;color:#8b93a1;min-height:18px;word-break:break-all}
+.err{color:#ff6b6b}
+</style></head><body><div class="card"><h1>WhaleMaid</h1><p class="sub">远程控制 · 设备编号 + 密码（无 IP）</p>
+<label>服务端地址（仅首次）</label><input id="server" placeholder="relay.example.com" autocomplete="off">
+<label>设备编号</label><input id="device" placeholder="WHALE-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+<label>设备密码</label><input id="pw" type="password" placeholder="长期密码" autocomplete="off">
+<button id="go">连接</button><div id="status"></div></div>
+<script>
+const $ = (id) => document.getElementById(id)
+const saved = JSON.parse(localStorage.getItem('whalemaid-controller') ?? '{}')
+$('server').value = saved.server ?? ''
+$('device').value = saved.device ?? ''
+$('go').onclick = async () => {
+  const st = $('status'); st.className = ''; st.textContent = '正在连接…'; $('go').disabled = true
+  try {
+    const res = await fetch('/_ctrl/connect', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server: $('server').value.trim(), deviceId: $('device').value.trim().toUpperCase(), password: $('pw').value }) })
+    const data = await res.json()
+    if (!res.ok) { st.className = 'err'; st.textContent = data.error ?? ('失败 ' + res.status); $('go').disabled = false; return }
+    localStorage.setItem('whalemaid-controller', JSON.stringify({ server: $('server').value.trim(), device: $('device').value.trim().toUpperCase() }))
+    st.textContent = '已连接，正在载入官方界面…'
+    location.href = '/'
+  } catch (e) { st.className = 'err'; st.textContent = String(e); $('go').disabled = false }
+}
+</script></body></html>

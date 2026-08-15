@@ -1,0 +1,16 @@
+{
+  "name": "@whalemaid/controller-android",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WhaleMaid 主控端 Android 壳（Capacitor）：WebView 设备管理首屏 + 原生隧道代理插件（OkHttp 证书固定 + NanoHTTPD/Java-WebSocket 本地代理 + WSS 隧道），官方 UI/API/WS 经受控端宿主原生承载（SPEC: docs/native-app-plan.md, D-020/023/025）",
+  "license": "AGPL-3.0",
+  "scripts": {
+    "cap:add": "cap add android",
+    "build": "cap sync android && cd android && ./gradlew assembleDebug"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/android": "^6.2.0"
+  }
+}

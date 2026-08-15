@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">WhaleMaid</string>
+    <string name="title_activity_main">WhaleMaid</string>
+    <string name="package_name">com.whalemaid.controller</string>
+    <string name="custom_url_scheme">com.whalemaid.controller</string>
+</resources>

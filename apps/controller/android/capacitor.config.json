@@ -1,0 +1,13 @@
+{
+  "appId": "com.whalemaid.controller",
+  "appName": "WhaleMaid",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true
+  },
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}
