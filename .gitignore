@@ -16,3 +16,4 @@ packages/android/local.properties
 .avd-home/
 .codex-home/
 .tmp/
+.relay-sec-test/

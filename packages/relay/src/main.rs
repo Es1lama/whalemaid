@@ -1,17 +1,19 @@
 // SPEC: docs/PREFLIGHT.md 中继控制面入口
 mod api;
 mod config;
+mod limiter;
 mod rathole;
 mod registry;
 
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 环境可配（docker 部署）：WHALEMAID_RELAY_LISTEN / WHALEMAID_RELAY_DATA / ADMIN_TOKEN
+    // 环境可配（docker 部署）：WHALEMAID_RELAY_LISTEN / WHALEMAID_RELAY_DATA / ADMIN_TOKEN / ADMIN_INSTALL_CODE
     let mut config = config::RelayConfig::default();
     if let Ok(v) = std::env::var("WHALEMAID_RELAY_LISTEN") {
         config.listen = v;
@@ -21,6 +23,7 @@ async fn main() -> Result<()> {
         config.rathole_server_cfg = config.data_dir.join("rathole-server.toml");
     }
     let admin_token = std::env::var("ADMIN_TOKEN").unwrap_or_default();
+    let install_code = std::env::var("ADMIN_INSTALL_CODE").unwrap_or_default();
 
     std::fs::create_dir_all(&config.data_dir)?;
 
@@ -34,6 +37,8 @@ async fn main() -> Result<()> {
         config: config.clone(),
         sidecar: Mutex::new(rathole::RatholeSidecar::new()),
         admin_token,
+        install_code,
+        limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
     });
 
     // sidecar 启动：rathole 服务端（首次配置=当前活跃设备）。
