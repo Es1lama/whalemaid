@@ -55,11 +55,11 @@ export class WhaleNodeClient {
 
   private async connect(deviceId: string, password: string): Promise<void> {
     // Node 端 ECDSA：用 node:crypto 生成 P-256 密钥对 + 签名（控制端身份，无需硬件级存储）
-    const { generateKeyPairSync, sign, createPublicKey } = await import('node:crypto')
+    const { generateKeyPairSync, sign } = await import('node:crypto')
     const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
-    const jwk = createPublicKey(publicKey).export({ format: 'jwk' })
+    const jwk = publicKey.export({ format: 'jwk' }) as JsonWebKey
     const hs = (await this.call('device.handshake', { deviceId, publicKeyJwk: jwk })) as { nonce: string }
-    const sig = sign('sha256', Buffer.from(hs.nonce, 'utf8'), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64')
+    const sig = sign('sha256', Buffer.from(hs.nonce, 'utf8'), privateKey).toString('base64') // DER（宿主验签含 DER 兜底）
     const bind = (await this.call('device.bind', { deviceId, nonce: hs.nonce, password, nonceSignature: sig })) as { deviceToken: string }
     this.token = bind.deviceToken
   }

@@ -55,11 +55,11 @@ var WhaleNodeClient = class {
     }
   }
   async connect(deviceId, password) {
-    const { generateKeyPairSync, sign, createPublicKey } = await import("node:crypto");
+    const { generateKeyPairSync, sign } = await import("node:crypto");
     const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-    const jwk = createPublicKey(publicKey).export({ format: "jwk" });
+    const jwk = publicKey.export({ format: "jwk" });
     const hs = await this.call("device.handshake", { deviceId, publicKeyJwk: jwk });
-    const sig = sign("sha256", Buffer.from(hs.nonce, "utf8"), { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("base64");
+    const sig = sign("sha256", Buffer.from(hs.nonce, "utf8"), privateKey).toString("base64");
     const bind = await this.call("device.bind", { deviceId, nonce: hs.nonce, password, nonceSignature: sig });
     this.token = bind.deviceToken;
   }
