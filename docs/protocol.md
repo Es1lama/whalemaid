@@ -1,19 +1,20 @@
-# WhaleMaid · 协议 v1 规格（PROTO）
+# WhaleMaid · 协议 v2 规格（PROTO）
 
-> 唯一现行版。代码模块头部引用 `SPEC: docs/protocol.md#PROTO-xxx`。承载无关：同一协议跑在直连与中继两种承载上。
+> 唯一现行版（ADR-041 后）。代码模块头部引用 `SPEC: docs/protocol.md#PROTO-xxx`。
+> 现行承载：主控端同源调用 **DSH 原生 `/api`**（官方前端零改动），经受控端插件网关鉴权后打到受控端；网关只保留设备配对/管理最小端点。旧版自定 `/api/v1` RPC 已废止（ADR-041），迁移路径见 PROTO-010。
 > 设计约束（ADR-021）：版本化信封、capability 广播、`CredentialVerifier` 抽象、三通道先行；**禁止出现 billing/subscription/account 字样**（Level 2 路由以 `server-provided` 能力位表达，不在开源代码中实现）。
 
 ---
 
-## PROTO-001 传输与信封
+## PROTO-001 传输与承载
 
-- 承载：HTTP(S) 单向请求 + SSE 事件流。WebSocket 留 V2（宿主 `WebUpgradeRoute` 已确认存在）。
-- 端点（宿主自建 listener，见 ADR-031 选项 B）：
-  - 请求：`POST /api/v1/<method>`，body = 信封 JSON；
-  - 事件：`GET /api/v1/events`（SSE）；SSE 不通时客户端降级轮询 `GET /api/v1/poll?since=<seq>`（3s，参考 dsh-remote-web-ui 的 cloudflared 经验）。
-- 请求信封：`{ "v": 1, "rpcId": "<uuid>", "method": "<name>", "payload": {} }`
-- 响应信封：`{ "v": 1, "rpcId": "<uuid>", "ok": true, "data": {} }` 或 `{ "ok": false, "error": { "code": "<见 PROTO-008>", "message": "..." } }`
-- SSE 帧：`data: {"v":1,"seq":<单调递增>,"type":"<见各通道>","payload":{}}`；重连用 `Last-Event-ID`。
+- 承载：HTTP(S) 请求 + SSE 事件流。WebSocket 留 V2。
+- **现行端点（ADR-041）**：
+  - 业务：`/api/**` —— DSH 原生 API，同源透传（`toFetchHandler(ctx.apiProxy)`），信封即 DSH 原生 wire 契约（`{ rpcId, result: { ok, value | error } }`），前端调用点零改动；
+  - 事件：`/api/events`（SSE，见 events.ts）；SSE 不通时客户端降级轮询；
+  - 网关最小端点（设备配对/管理，网关自有命名）：`bind`/`handshake`/`list`/`revoke`/`heartbeat`（认证/语义见 PROTO-003/009）。
+- 直连与中继承载同一套 `/api` 语义（PROTO-004）；中继控制面在服务端 `/_whalemaid/*` 命名空间下（见 docs/deploy-server.md，与网关协议层无耦合）。
+- **迁移路径（过渡态，audit#3 执行中）**：插件当前仍保留 `/api/v1/<method>` 过渡实现（packages/plugin/src/routes.ts），随官方前端移植 spike 完成后一次性切到原生 `/api` 透传并删除过渡代码；CI 以禁止新代码使用 `/api/v1` 字面量阻断回潮。
 
 ## PROTO-002 capability 广播
 
@@ -25,7 +26,7 @@
 
 接口抽象：`CredentialVerifier = { verify(request) → identity | null }`，v1 两个实现：`LongTermPasswordVerifier`、`OneTimePasswordVerifier`（未来账号 token 为第三个实现，不重写协议）。
 
-1. **设备 ID**：宿主生成 `WHALE-XXXX-XXXX`（8 字节 base32，排除易混字符），桌面插件设置页展示。
+1. **设备 ID**：宿主生成 `WHALE-XXXX-XXXX`（8 字节 base32，排除易混字符），插件设置页展示。
 2. **长期密码（REQ-002）**：宿主生成随机 12 字符，设置页展示、可重生成（重生成 = 吊销全部设备 token）。
 3. **首次配对（挑战-应答）**：
    - 客户端 `device.handshake { deviceId, publicKey(jwk) }` → 宿主回 `{ nonce, caps }`；
@@ -36,21 +37,20 @@
 
 ## PROTO-004 会话通道（E2E 主通道）
 
-- 方法（一一对应 DSH 原生语义，薄转发，不改业务）：`session.list`、`session.history`、`session.create`、`session.prompt`、`session.stop`、`session.models`、`session.selectModel`、`permission.get`、`permission.set`。
+- 承载 = DSH 原生 `/api` 会话语义（`session.list`、`session.history`、`session.create`、`session.prompt`、`session.stop`、`session.models`、`session.selectModel`、`permission.get/set`），网关薄转发、不改业务；直连与中继下完全相同。
 - SSE 帧类型：`turn-status`（running/done/interrupted）、`message`（增量）、`tool-call`（折叠展示用）、`permission-request`（审批，客户端弹确认）。
-- 承载无关：直连与中继下完全相同。
 
 ## PROTO-005 语音通道（知情同意通道）
 
 - `voice.transcribe { audio, format, provider }` → 宿主按用户 BYOK 配置调 ASR → `{ text }`。
-- `provider` 为注册表键（v1 注册表：`dashscope-paraformer`；可插拔，见 ADR-009）。
+- `provider` 以代码注册表 `packages/contract/src/channels.ts` 的 `VOICE_PROVIDERS` 为唯一权威（v1：`dashscope`/`openai`/`groq`/`iflytek`；可插拔，见 ADR-009）。**验收状态**：DashScope 路径未经真实 key 验收（PREFLIGHT S4，发布前必须完成或移出能力位，audit#7）。
 - Level 2（`server-provided`）：能力位预留，开源实现**不含**该路由；客户端据 caps 显示知情同意 UI。
 - 热词（仅 `hotwords` 位存在时）：`voice.hotwords.update { add: string[], remove: string[] }`——宿主本地抽取后调用；只传词表（ADR-010）。
 
 ## PROTO-006 视觉通道（知情同意通道）
 
 - `vision.describe { image, provider }` → 宿主调视觉 API（BYOK）→ `{ text }`；客户端把 text 嵌入下一条 `session.prompt`。
-- v1 注册表：`deepseek-ocr`、`qwen-vl-max`、`qwen-vl-plus`（ADR-035）；`server-provided` 预留。
+- `provider` 以 `packages/contract/src/channels.ts` 的 `VISION_PROVIDERS` 为唯一权威（v1：`deepseek-ocr`/`qwen-vl`/`openai-vision`/`grok-vision`/`gemini`，ADR-035）；`server-provided` 预留。
 
 ## PROTO-007 目录浏览与工作区创建
 
@@ -61,7 +61,7 @@
 
 | code | 语义 |
 |---|---|
-| `ok` | 成功（信封 ok:true） |
+| `ok` | 成功 |
 | `bad-request` | 信封/参数非法 |
 | `auth-failed` | 密码/签名/凭据错误 |
 | `device-revoked` | 设备已被吊销（REQ-004） |
@@ -78,3 +78,18 @@
 - 吊销即时生效：宿主移除设备条目后，该设备下一次请求回 `device-revoked`，SSE 连接同时断开（ADR-012）。
 - 宿主本地审计日志只记元数据（时间/设备/方法/结果），不记内容（REQ-016）。
 - 中继（rathole）只转发密文，与协议层无耦合（ADR-032）。
+
+## PROTO-010 网关最小端点（设备配对/管理）
+
+> 主控端与受控端网关之间的唯一自研面。业务能力全部走 `/api` 原生透传；只有配对/管理留在网关（ADR-041）。
+
+| 端点 | 语义 | 认证 |
+|---|---|---|
+| `device.handshake` | 交换 nonce + caps（PROTO-003） | 公开 |
+| `device.bind` | 长期密码绑定、签发 device_token | 挑战-应答 + 密码 |
+| `device.bindTemporary` | 临时密码换短 TTL token | 密码 |
+| `device.list` | 受控端设备信息（自身） | Bearer device_token |
+| `device.revoke` | 吊销 device_token（REQ-004） | Bearer + 密码 |
+| `device.heartbeat` | 在线状态保活（TM-005） | Bearer |
+
+服务端连接流程（ADR-042，UU/ToDesk 式，**用户不填任何 IP**）：受控端注册设备编号+密码哈希 → 主控端 `/_whalemaid/connect`（编号+密码，限速/锁定）→ 服务端返回寻址 → 主控端经 rathole 隧道连到受控端网关 → 网关侧按本表完成挑战应答绑定 → 进入 `/api` 原生会话。

@@ -2,9 +2,6 @@
 // SPEC: docs/threat-model.md#TM-001..013（网关即检查点）
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
 import {
   CAPABILITIES,
   DEVICE_ID_PATTERN,
@@ -16,35 +13,6 @@ import {
 import type { Store } from './store.js'
 import type { PasswordVerifier } from './verifier.js'
 import type { EventHub } from './events.js'
-
-/** 移动端构建产物（/m 直连 UI，REQ-001）；打包时由 build 脚本拷入 */
-const MOBILE_DIST = fileURLToPath(new URL('./mobile-dist/', import.meta.url))
-
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.webmanifest': 'application/manifest+json',
-  '.json': 'application/json',
-}
-
-/** 静态文件服务（仅服务打包产物目录内文件，防路径穿越） */
-function serveStatic(res: ServerResponse, rel: string): boolean {
-  const ext = rel.slice(rel.lastIndexOf('.'))
-  const type = CONTENT_TYPES[ext] ?? 'application/octet-stream'
-  const abs = join(MOBILE_DIST, rel)
-  if (!abs.startsWith(MOBILE_DIST)) return false
-  try {
-    const data = readFileSync(abs)
-    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' })
-    res.end(data)
-    return true
-  } catch {
-    return false
-  }
-}
 
 /** dsh-host-apiproxy 宿主侧纪律：{ rpcId, result: { ok, value | error } }（API 契约权威） */
 export interface HostResult<T = unknown> {
@@ -163,11 +131,6 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
     if (path === '/healthz') return json(res, 200, { ok: true })
     if (path === '/api/v1/events') return hub.subscribe(req, res)
     if (path === '/api/v1/poll') return json(res, 200, { events: hub.replay(Number(url.searchParams.get('since') ?? 0)) })
-    // 直连移动 UI（REQ-001）：/m 与 /m/ 同源，静态资源从 mobile-dist 服务
-    if (path === '/m' || path === '/m/') return serveStatic(res, 'index.html') || json(res, 404, { error: 'mobile dist not built' })
-    if (path.startsWith('/assets/') || path === '/manifest.webmanifest') {
-      return serveStatic(res, path.slice(1)) || json(res, 404, { error: 'not found' })
-    }
     if (path !== '/api/v1') return json(res, 404, { error: 'not-found' })
 
     const method = url.searchParams.get('method') ?? ''

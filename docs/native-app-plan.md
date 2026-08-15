@@ -1,7 +1,7 @@
-# WhaleMaid · 主控端 App 移植方案（待审）
+# WhaleMaid · 主控端 App 移植方案（已批准，执行中）
 
 > 唯一现行版。依据 ADR-039/040/041：**一个前端、多个壳**；受控端 = 能跑 DSH 的端 + 插件；主控端 = 控制 App（无需 DSH）。
-> 本方案只描述"做什么、怎么改"，不写代码；批准后才动工。
+> 壳选型已定案（D-025）：Capacitor（Android/iOS）+ Electron（PC）+ Web，PC 双供，无 Tauri。
 
 ## 0. 一句话
 
@@ -12,12 +12,12 @@
 - 官方仓库 `deepseek-ai/deepseek-harness`（MIT）：前端相关包 `dsh-web-frontend`、`dsh-client-*`（连接/API 代理/UI 组件）、`dsh-host-apiproxy` 的浏览器侧 API 契约。
 - 移植 = 复制源码 + 保留版权声明（MIT 义务），修改仅限"适配与新增"清单。
 
-## 2. 打包壳选型（待确认）
+## 2. 打包壳选型（D-025 已定案）
 
 | 端 | 壳 | 说明 |
 |---|---|---|
 | Android / iOS | **Capacitor** | 同一 WebView 前端；原生桥插件官方支持相机/相册/麦克风/文件/推送 |
-| PC | **Electron 或 Tauri**（待选） | 同一前端包桌面壳；Tauri 体积小、Electron 生态熟 |
+| PC | **Electron**（+ Web 同供） | 同一前端包桌面壳；Web 版为同一构建产物直挂静态站点 |
 | 鸿蒙 | WebView 壳（后置） | ArkWeb 装载同一前端 |
 
 **回答"可以直接打包成 App 吗"：可以。** 用户拿到的是 APK / dmg / App Store 包，不出现浏览器。
@@ -46,20 +46,20 @@
 
 ## 6. 废止与清理（ADR-041）
 
-- `/api/v1` 自定协议：废止；设备配对/管理最小端点（bind/revoke/list/heartbeat）并入网关原生风格路由；
-- `packages/control`（agent 工具）：废止，代码保留待移除；
-- 现有 Android Kotlin / iOS SwiftUI 原生 UI：以移植前端取代（Kotlin/SwiftUI 源码归档删除）。
+- `/api/v1` 自定协议：废止；设备配对/管理最小端点（bind/revoke/list/heartbeat）并入网关原生风格路由（PROTO-010）；
+- `packages/control`（agent 工具）：废止，代码**已删除**（git 历史备份 commit 9ec7fef）；
+- 自研 Android Kotlin / iOS SwiftUI 原生 UI：废止，源码**已删除**（git 历史备份 commit 9ec7fef）；插件内旧自研 PWA 构建产物 `/m` 静态服务已随本轮清仓移除。
 
 ## 7. 里程碑
 
 1. **验证官方前端可独立构建**（spike：拉取前端包、在独立 shell 跑起来、指向网关）——决定移植细节的最大不确定点；
 2. Capacitor 壳 + 官方前端 + 登录/设备管理模块跑通（Android）；
 3. 原生桥：相机/麦克风/文件；
-4. iOS 壳（CI macOS 构建验证）+ PC 壳；
+4. iOS 壳（CI macOS 构建验证）+ PC 壳（Electron + Web）；
 5. 三端一致回归（ADR-039）。
 
-## 8. 待你确认
+## 8. 已定案
 
-1. 壳选型：Capacitor（安卓/iOS）OK？PC 选 **Electron 还是 Tauri**？
-2. 设备管理模块放**登录前**（首屏设备列表，ToDesk 式）——确认？
-3. 官方前端是否允许**本地构建改造**（MIT 允许，但构建链可能依赖官方 monorepo）——我 spike 后给你结论。
+1. 壳选型（D-025 定案）：Capacitor（安卓/iOS）+ Electron（PC）+ Web，无 Tauri；
+2. 设备管理模块放**登录前**（首屏设备列表，ToDesk 式）；
+3. 官方前端本地构建改造：MIT 允许；构建链依赖官方 monorepo 的可能性以 spike 结论为准。

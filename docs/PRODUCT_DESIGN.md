@@ -28,23 +28,23 @@
 3. **开源传承与污染盈利理论**：A 档直接继承；AGPL 走四步法（见下）；自写只在以下情形成立——**无人区（无轮子）/ 轮子改造成本 > 自写 / 产品一致性需求（统一协议、统一凭据、统一审计）**。
 
 平衡点 = min(复用：接入+适配+受限；自写：开发+测试+长期维护+预期 bug+许可风险)。
-当前预期自写候选（**不预设，逐项过流程**）：控制面（设备身份/授权/吊销）、协议 glue、移动 UI、热词管线、视觉适配。已知复用：隧道 = rathole sidecar、宿主能力 = DSH SDK、语音/热词/视觉 = 现成 API、加密 = TLS/WebCrypto。
+当前预期自写候选（**不预设，逐项过流程**）：控制面（设备身份/授权/吊销）、协议 glue、移动适配层（官方前端移植，不自研 UI）、热词管线、视觉适配。已知复用：隧道 = rathole sidecar、宿主能力 = DSH SDK、主控端 UI = 官方 DSH web 前端（MIT 移植）、语音/热词/视觉 = 现成 API、加密 = TLS/WebCrypto。
 
 **引用顺序四步法**：① A 档源码优先（frp/rathole 直接读）→ ② B 档公开文档（仅用户可见行为，不能上位替代实现细节）→ ③ RFC/标准 → ④ C 档 AGPL 仅洁净室最后手段，留证 `docs/research/cleanroom-notes.md`。
 
 ## §3 技术栈
 
-插件/移动端 TypeScript（React PWA）；中继/控制面 Rust（axum/tokio + SQLite）；传输 TLS + WebCrypto。
+被控插件 Node/TS（DSH 插件，三平台 macOS/Ubuntu/Windows）；中继/控制面 Rust（axum/tokio + SQLite）；传输 TLS + WebCrypto。
 
-**多端与跨平台策略（v2 修订）**：手机端目标为**原生体验**（Web PWA 仅为兜底）。顺序决策（ADR-037）：本机无完整 Xcode（有 Swift 编译器但无 iOS SDK）→ **Android（Kotlin）本机先行全验证；iOS（SwiftUI）源码并行、由 GitHub Actions macOS runner 做构建验证**。宿主插件（Node/TS）跨平台（macOS/Ubuntu/Windows）。统一 API 契约（REQ-018）仍是唯一权威：两个原生端与 PWA 都对着 docs/protocol.md 实现。
+**多端与跨平台策略（v3 定案，ADR-039/040 + D-025）**：主控端 = **移植官方 DSH web 前端（MIT）+ 移动/桌面适配**，一个前端、多个壳——**Capacitor（Android/iOS）+ Electron（PC）+ Web**（D-025 定案，PC 双供，无 Tauri）；不做自研 UI。受控端 = 能跑 DSH 的任意端 + 插件（未来安卓端自动成立，因为是插件）。服务端 = 流量转接（中继 + 账号分层）。统一契约：主控端同源调 DSH 原生 `/api`（经网关打到受控端）+ 网关最小端点，见 docs/protocol.md（PROTO-010）。
 
 ## §4 服务分层
 
 Level -1（仅邮箱：极高限速，一周停服）/ Level 0（绑手机：高限速限并发）/ Level 1（订阅：放宽 + 恶意/亏损阈值；绑手机送试用暂定 2 个月）/ Level 2（增值：官方 ASR+热词+视觉）。
 
-## §5 直连模式（REQ 级）
+## §5 连接模式（REQ 级）
 
-开源代码原生支持 IP 直连（`http(s)://<主机IP>:<端口>/m`）；自托管中继；官方中继三种模式共用协议与移动端。
+默认 UX = ADR-042（UU/ToDesk 式）：设备编号 + 密码，服务端匹配后经中继连通，**任何界面不出现 IP**（服务端地址仅 App 一次性配置）。开源代码同时保留局域网直连（`http(s)://<主机IP>:<端口>`）为高级/专家选项（ADR-019，自托管场景），不进入默认引导流程；自托管中继与官方中继共用协议与主控端。
 
 ## §6 三通道
 
@@ -56,7 +56,7 @@ Level -1（仅邮箱：极高限速，一周停服）/ Level 0（绑手机：高
 
 ## §8 实施边界
 
-- MVP：被控插件、Rust 中继+控制面、全自研移动端、IP 直连、工作区创建（不宣传）、目录模式、引用复制、文档/架构图/威胁模型/演示视频。
+- MVP：被控插件、Rust 中继+控制面、主控端（官方前端移植 + Capacitor/Electron/Web 三壳）、连接闭环（编号+密码，无 IP）、工作区创建（不宣传）、目录模式、引用复制、文档/架构图/威胁模型/演示视频。
 - V1：语音 BYOK、热词附加插件、视觉 BYOK（DeepSeek-OCR/通义 VL）、Web Push + Telegram、多机、临时密码分享、会话总结。
 - Phase B（闭源 = **完整控制管理系统**）：手机号账号、分层计费、设备管理控制台、流量统计、风控、工单/客服、运营后台、Level 2 服务——盈利性代码全部收敛于此系统。
 - 不做：像素远程桌面、手机沙盒、官方背书第三方 key 注入、与 dsh-web-ui 耦合、收费占位代码、非洁净室读 AGPL。
@@ -82,8 +82,8 @@ Phase B 前置：公司主体→短信→支付→备案→增值电信→PIPL�
 
 ## §11 里程碑
 
-M0（进行中）：ADR → 需求编号表 → spike S0–S5 → 协议 v1 → 威胁模型 → 仓库骨架。
-M1：中继 MVP + 被控插件 + 移动端 + IP 直连。M2：完整 MVP → v0.1。M3：商店/awesome/发布帖。M4：Phase B 合规 + FunASR 预研。
+M0（已收官）：ADR → 需求编号表 → spike S0–S5 → 协议 v2 → 威胁模型 → 仓库骨架。
+M1：中继 MVP + 被控插件 + 主控端 App（移植前端，Capacitor/Electron/Web）+ 编号密码连接闭环（无 IP）。M2：完整 MVP → v0.1。M3：商店/awesome/发布帖。M4：Phase B 合规 + FunASR 预研。
 
 ## §12 开放问题
 

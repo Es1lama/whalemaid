@@ -16,15 +16,15 @@
 
 - **成熟实现**：RustDesk 设备访问密码只存哈希（scrypt，B 档文档）；行业标准 = 加盐慢哈希 + 限速 + 常数时间比较。
 - **我们现状**：原计划 sha256 无盐（已回退未实现）；无限速。
-- **修复方案**：`argon2id`（Rust `argon2` crate）加盐哈希存服务端；`/connect` 按 (IP, deviceId) 双维度**令牌桶限速**（如 5 次/分钟）+ 连续失败锁定（5 次锁 5 分钟）；比较用常数时间（哈希比较本身即可，另加 timing 安全断言）。受控端注册时上报的密码哈希直接复用（不再自算 sha256）。
-- **验收单测**：错误密码拒绝；同哈希不同盐产出不同；限速窗口内第 6 次被拒（429）；锁定后正确密码也被拒。
+- **修复方案**：`scrypt`（PHC，Node/Rust 跨语言互验，参数 ln=14,r=8,p=1）加盐哈希存服务端；`/connect` 按 (IP, deviceId) **固定窗口限速**（5 次/分钟）+ 连续失败锁定（5 次锁 5 分钟）——**窗口计数与失败计数分离**（失败不占限速预算，成功清零失败历史）；受控端注册时上报的密码哈希直接复用（服务端不碰明文密码）。
+- **验收单测（已绿）**：错误密码 401；同哈希不同盐产出不同；限速窗口内第 6 次被拒 429；连续 5 次失败锁定 423、锁定期内正确密码也拒；失败不占限速预算；成功清零失败历史。
 
-## SEC-003 隧道凭据下发（/connect → 主控端拿 rathole token）
+## SEC-003 隧道凭据（token 属受控端侧；主控端授权在网关侧）
 
-- **成熟实现**：rathole per-service token 是**静态配置项**，靠 noise 信道保护传输；frp token 经 TLS 控制面下发。
-- **我们现状**：计划 /connect 返回 rathole token——若走 HTTP 即明文泄露。
-- **修复方案**：/connect 仅经 TLS 提供（随 SEC-001）；且**每次连接签发一次性隧道 token**（连接结束即吊销/轮换），复用 rathole 热重载移除条目；token 只出现一次。
-- **验收单测**：/connect 响应含 token 且端点强制 TLS；断开后旧 token 握手被 rathole 拒绝（集成测试）。
+- **成熟实现**：rathole per-service token 是**受控端客户端的静态凭据**（server.toml 明文、0600 权限），靠 noise 信道保护；frp token 经 TLS 控制面下发。主控端只是连服务端口的 TCP 客户端，**不持隧道 token**。
+- **我们现状（已修正，Codex 审计#6）**：曾计划 /connect 返回并轮换 rathole token——轮换后受控端运行中的 sidecar 仍用旧 token，立即失配；且把 sidecar 服务 token 当主控端凭据下发属模型错误。
+- **修复方案**：/connect 仅做**密码验证 + 寻址**（TLS 上，SEC-001），返回 `{ deviceId, service, port }`，**不含 token、不轮换**；隧道 token 一经注册固定，经 `/devices/:id/tunnel`（凭据鉴权）下发受控端 sidecar；主控端经服务端口进入隧道后，在受控端网关侧完成挑战应答绑定（SEC-004），密码只走 noise 密文信道。
+- **验收单测（已绿）**：/connect 响应不含 tunnelToken；连接前后 `/devices/:id/tunnel` 返回同一 token；错密 401、连续错 5 次锁定 423、锁定期内正确密码也拒绝；/connect 仅 TLS 提供。
 
 ## SEC-004 网关认证（主控端 → 受控端 /api）
 

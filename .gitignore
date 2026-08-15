@@ -17,3 +17,6 @@ packages/android/local.properties
 .codex-home/
 .tmp/
 .relay-sec-test/
+
+# 中继实机测试产物（设备记录/隧道配置/自签私钥绝不入库）
+.relay-*/

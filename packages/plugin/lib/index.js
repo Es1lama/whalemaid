@@ -347,33 +347,6 @@ var EventHub = class {
 // src/routes.ts
 import { createServer } from "node:http";
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { readFileSync as readFileSync2 } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { join as join2 } from "node:path";
-var MOBILE_DIST = fileURLToPath(new URL("./mobile-dist/", import.meta.url));
-var CONTENT_TYPES = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".webmanifest": "application/manifest+json",
-  ".json": "application/json"
-};
-function serveStatic(res, rel) {
-  const ext = rel.slice(rel.lastIndexOf("."));
-  const type = CONTENT_TYPES[ext] ?? "application/octet-stream";
-  const abs = join2(MOBILE_DIST, rel);
-  if (!abs.startsWith(MOBILE_DIST)) return false;
-  try {
-    const data = readFileSync2(abs);
-    res.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
-    res.end(data);
-    return true;
-  } catch {
-    return false;
-  }
-}
 var PUBLIC_METHODS = /* @__PURE__ */ new Set(["device.handshake", "device.bind", "device.bindTemporary"]);
 function json(res, status, body) {
   res.writeHead(status, {
@@ -433,10 +406,6 @@ function makeRouter(deps) {
     if (path === "/healthz") return json(res, 200, { ok: true });
     if (path === "/api/v1/events") return hub.subscribe(req, res);
     if (path === "/api/v1/poll") return json(res, 200, { events: hub.replay(Number(url.searchParams.get("since") ?? 0)) });
-    if (path === "/m" || path === "/m/") return serveStatic(res, "index.html") || json(res, 404, { error: "mobile dist not built" });
-    if (path.startsWith("/assets/") || path === "/manifest.webmanifest") {
-      return serveStatic(res, path.slice(1)) || json(res, 404, { error: "not found" });
-    }
     if (path !== "/api/v1") return json(res, 404, { error: "not-found" });
     const method = url.searchParams.get("method") ?? "";
     let envelope = { v: PROTOCOL_VERSION, rpcId: "", method, payload: {} };
@@ -752,7 +721,7 @@ function createVisionAdapter(cfg, resolveKey) {
 // src/relay.ts
 import { spawn } from "node:child_process";
 import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+import { join as join2 } from "node:path";
 import { randomBytes as randomBytes3, scryptSync, createHash as createHash2 } from "node:crypto";
 import https from "node:https";
 function phcScrypt(password, salt = randomBytes3(16)) {
@@ -855,9 +824,9 @@ var RelayClient = class {
       `local_addr = "127.0.0.1:${this.cfg.pluginPort}"`,
       ""
     ].join("\n");
-    const dir = join3(this.cfg.dataDir, "relay");
+    const dir = join2(this.cfg.dataDir, "relay");
     mkdirSync2(dir, { recursive: true });
-    const cfgFile = join3(dir, "rathole-client.toml");
+    const cfgFile = join2(dir, "rathole-client.toml");
     writeFileSync2(cfgFile, cfgText, { mode: 384 });
     this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: "ignore" });
     this.child.on("exit", (code) => this.log(`[whalemaid] rathole \u5BA2\u6237\u7AEF\u9000\u51FA code=${code}`));
@@ -957,7 +926,10 @@ function apply(ctx, config) {
   } catch {
     ctx.logger.warn("[whalemaid] SSE \u4E8B\u4EF6\u6865\u6682\u4E0D\u53EF\u7528\uFF08\u4E8B\u4EF6\u540D\u672A\u5728\u5BBF\u4E3B\u8F6C\u53D1\u5217\u8868\u4E2D\uFF09");
   }
-  const relay = resolved.relayUrl ? new RelayClient(
+  if (resolved.relayUrl && !resolved.relayFingerprint) {
+    ctx.logger.error("[whalemaid] \u914D\u7F6E\u4E86 relayUrl \u4F46\u7F3A\u5C11 relayFingerprint\uFF1A\u62D2\u7EDD\u63A5\u5165\u4E2D\u7EE7\uFF08SEC-001\uFF0C\u9632\u4E2D\u95F4\u4EBA\uFF09\u2014\u2014\u6307\u7EB9\u89C1\u670D\u52A1\u7AEF\u542F\u52A8\u65E5\u5FD7");
+  }
+  const relay = resolved.relayUrl && resolved.relayFingerprint ? new RelayClient(
     {
       relayUrl: resolved.relayUrl,
       relayInstallCode: resolved.relayInstallCode,

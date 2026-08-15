@@ -2,7 +2,7 @@
 
 > M0 已收官、M1/V1 进行中（唯一现行版，旧版只存 git 历史）。
 > 环境注记：仓库现位于工作区子目录 `whalemaid/`；GitHub 走代理 `http://127.0.0.1:7890`；gh 账号 **Es1lama**；双仓已建已推（公开 whalemaid / 私有 whalemaid-console）。
-> 移动端原生（ADR-037）：Android(Kotlin) 本地先行；iOS(SwiftUI) 源码 + CI macOS 验证。
+> 主控端（ADR-039/040，D-025 定案）：移植官方 DSH web 前端（MIT）+ Capacitor（Android/iOS）+ Electron（PC）+ Web；自研原生 UI 路线（旧 ADR-037）已废止，源码已删除。
 
 ---
 
@@ -11,7 +11,7 @@
 | # | 项 | 结论 |
 |---|---|---|
 | B1 | 定名 | **WhaleMaid（鲸娘）**，代码名 `whalemaid`；仓库 github.com/Es1lama/whalemaid（已建已推） |
-| B2 | 技术栈 | **中继/控制面 Rust**；插件/移动端 TypeScript（React PWA）；SQLite；TLS+WebCrypto |
+| B2 | 技术栈 | **中继/控制面 Rust**；被控插件 Node/TS（三平台）；主控端 = 官方前端移植（React/TS）+ Capacitor/Electron/Web 三壳；SQLite；TLS+WebCrypto |
 | B3 | Level 定义 | Level -1（仅邮箱：极高限速，一周停服）/ Level 0（绑手机：高限速限并发）/ Level 1（订阅：放宽+恶意/亏损阈值，绑手机送试用） / Level 2（增值） |
 | B4 | 仓库归属 | gh 账号 **Es1lama**（双仓已建已推） |
 
@@ -20,7 +20,7 @@
 1. **引用顺序四步法**：A 档源码优先（frp/rathole 的 Apache-2.0 代码直接读）→ B 档公开文档（只覆盖用户可见行为，**不能上位替代实现细节**）→ RFC/标准 → C 档 AGPL 仅洁净室最后手段，留证 `docs/research/cleanroom-notes.md`。
 2. **复用决策程序**（造轮子/复用边界/传承盈利三理论合一，见 DESIGN §2）：每个复用 vs 自写决策过流程并记 ADR；语言不一致优先 sidecar/进程边界复用。
 3. **开源协议 AGPL-3.0（已确认）** + 双许可保留；社区贡献进闭源 SaaS 前必须 CLA（Phase B 生效前设立）。
-4. **直连模式是 REQ 级要求**：开源代码必须原生支持 IP 直连。
+4. **连接模式（ADR-042）**：默认 UX = 设备编号+密码、经中继连通、无 IP；IP 直连保留为自托管高级选项。
 5. **不过度耦合**：代码/注释/README 禁止出现 billing/subscription/account 字样或死代码桩；预留只体现在协议接缝。
 6. **文档治理六原则**：简洁 / 有效（每条只服务一个目标）/ 时效（旧语义不入工作区，只存 git 历史，唯一现行版制）/ 指导（能直接指导开发）/ 一一对应（文档↔代码唯一映射）/ 溯源（编号贯穿，报错可反查）。
 
@@ -45,9 +45,9 @@
 
 - ✅ REQ-003 临时密码（一次性/限时 + 短 TTL token，单测覆盖）；
 - ✅ REQ-008 permission.get/set 透传（projections 基线 + /permission 命令）；
-- ✅ 移动端完整视图：登录双模式/主页（工作区+会话）/目录浏览器（REQ-009）/聊天（REQ-005/006/007）+ 目录模式（REQ-010）+ 引用复制（REQ-011）；
-- ✅ 插件直连服务 /m（完整移动 UI，REQ-001 闭环）；workspace.list 透传；
-- ⬜ SSE 事件桥：已注册 host/session-status，事件流量验证需手机端实测；
+- ⬜ 主控端 App（ADR-039 移植前端）：官方前端独立构建 spike → Capacitor/Electron/Web 三壳 → 设备管理模块（ToDesk 式首屏）；旧自研移动 UI 已废止删除，不恢复；
+- ✅ 插件网关（自建 listener，选项 B）：handshake/绑定/会话/目录全链路透传（7/7）；`/m` 旧自研 PWA 静态服务已随清仓移除；
+- ⬜ SSE 事件桥：已注册 host/session-status，事件流量验证需主控端实测；
 - ⬜ workspace.create 冒烟已验证（8/8）；语音/视觉/热词 = V1 范围（REQ-020..022）；
 - ⬜ 精确 HistoryEntry 渲染与模型 provider 分组目录（骨架级提取，待对齐类型）。
 
@@ -55,7 +55,7 @@
 
 | # | 验证点 | 目的 |
 |---|---|---|
-| S0 | **IP 直连模式**：DSH web 绑定 0.0.0.0 后，手机浏览器直连 `/m` 路由实测 | ✅ 静态：rc.6 CLI 拒绝 `--host 0.0.0.0` → 改**插件自建 listener（选项 B）**；实机待 M1 | 
+| S0 | **直连模式**：DSH web 绑定 0.0.0.0 后，手机浏览器直连实测 | ✅ 静态：rc.6 CLI 拒绝 `--host 0.0.0.0` → 改**插件自建 listener（选项 B）**；直连 = 高级选项（ADR-042） | 
 | S1 | DSH 插件注册 web 路由 + 调宿主 API（browse seam、`workspace.create`、`dsh-credentials`） | ✅ 静态：全部接口确认（见 research/spike-S0-S1.md）；实机待 M1 |
 | S2 | rathole（Rust）服务端/客户端实测：noise 握手、授权语义、sidecar 管理可行性 | ✅ sidecar 定案（热重载增删设备条目、吊销=移除条目）；ADR-032 |
 | S3 | PWA WebCrypto 密钥对：生成/持久化/不可导出 | ✅ 方案确认（ECDSA P-256 + IndexedDB + 挑战应答）；实机 M1；ADR-033 |

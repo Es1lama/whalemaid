@@ -2,7 +2,10 @@
 // SPEC: docs/security-audit.md#SEC-001/002/003 每设备独立凭据、argon2 密码哈希、隧道 token 轮换
 // SPEC: docs/adr/INDEX.md#ADR-032 每设备 = rathole 一个 service + token
 use anyhow::Result;
-use scrypt::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use scrypt::password_hash::PasswordHash;
+#[cfg(test)]
+use scrypt::password_hash::{PasswordHasher, SaltString};
+use scrypt::password_hash::PasswordVerifier;
 use scrypt::Scrypt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,6 +52,8 @@ mod hex {
 }
 
 /// SEC-002：scrypt 加盐慢哈希（PHC 字符串；参数显式 ln=14,r=8,p=1，Node 端 crypto.scryptSync(N=16384) 可生成同格式）
+/// 生产路径不哈希明文密码（受控端注册时只上传密码哈希；主控端 /connect 只做 verify）——仅测试用
+#[cfg(test)]
 pub fn hash_password(password: &str) -> Result<String> {
     let mut salt_bytes = [0u8; 16];
     getrandom::getrandom(&mut salt_bytes).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -137,17 +142,6 @@ impl Registry {
         }
     }
 
-    /// SEC-003：隧道 token 一次性轮换（旧 token 随配置热重载即时失效）
-    pub fn rotate_tunnel_token(&mut self, device_id: &str) -> Result<Option<String>> {
-        let Some(dev) = self.devices.iter_mut().find(|d| d.id == device_id && !d.revoked) else {
-            return Ok(None)
-        };
-        let token = Uuid::new_v4().simple().to_string();
-        dev.rathole_token = token.clone();
-        self.persist()?;
-        Ok(Some(token))
-    }
-
     pub fn active(&self) -> impl Iterator<Item = &DeviceRecord> {
         self.devices.iter().filter(|d| !d.revoked)
     }
@@ -224,13 +218,15 @@ mod tests {
         assert!(!verify_password("wrong", NODE_PHC));
     }
 
+    /// SEC-003（Codex 审计修复）：隧道 token 注册后固定——授权不靠 token 轮换，主控端在网关侧认证
     #[test]
-    fn tunnel_token_rotation() {
+    fn tunnel_token_stable_after_register() {
         let mut reg = temp_registry();
-        let (rec, _, old) = reg.register("whale-test-cccc", &hash_password("pw").unwrap()).unwrap();
-        let new = reg.rotate_tunnel_token(&rec.id).unwrap().unwrap();
-        assert_ne!(old, new);
-        assert_eq!(reg.active().next().unwrap().rathole_token, new);
+        let (rec, _, issued) = reg.register("whale-test-cccc", &hash_password("pw").unwrap()).unwrap();
+        // 再取一次（等价于心跳/连接后的状态）仍为同一 token
+        let again = reg.active().find(|d| d.id == rec.id).unwrap().rathole_token.clone();
+        assert_eq!(issued, again);
+        assert_eq!(reg.active().next().unwrap().rathole_token, issued);
     }
 
     #[test]

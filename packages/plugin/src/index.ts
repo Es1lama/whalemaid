@@ -103,7 +103,11 @@ export function apply(ctx: Context, config?: Config): void {
   }
 
   // 中继接入（docs/deploy-server.md）：安装码注册（设备编号+密码哈希）→ 隧道 → 凭据心跳
-  const relay = resolved.relayUrl
+  // SEC-001（Codex 审计修复）：relayFingerprint 为空 = 拒绝接入（rejectUnauthorized:false 下无指纹等于裸奔）
+  if (resolved.relayUrl && !resolved.relayFingerprint) {
+    ctx.logger.error('[whalemaid] 配置了 relayUrl 但缺少 relayFingerprint：拒绝接入中继（SEC-001，防中间人）——指纹见服务端启动日志')
+  }
+  const relay = resolved.relayUrl && resolved.relayFingerprint
     ? new RelayClient(
         {
           relayUrl: resolved.relayUrl,

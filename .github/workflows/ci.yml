@@ -5,6 +5,12 @@ on:
   pull_request:
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash .github/scripts/check-banned-terms.sh
+
   ts:
     runs-on: ubuntu-latest
     steps:
@@ -15,14 +21,6 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm -r typecheck
       - run: pnpm -r test
-
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --manifest-path packages/relay/Cargo.toml
-      - run: cargo test --manifest-path packages/relay/Cargo.toml
 
   rust:
     runs-on: ubuntu-latest
