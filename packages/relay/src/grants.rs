@@ -90,3 +90,25 @@ mod tests {
         assert_eq!(s.consume("t1", "WHALE-TEST-0001"), None);
     }
 }
+
+impl GrantStore {
+    /// 吊销某设备全部在途 grant（密码轮换/设备吊销时调用；审计三轮#3）
+    pub fn clear_device(&mut self, device_id: &str) {
+        self.grants.retain(|_, g| g.device_id != device_id);
+    }
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn clear_device_revokes_pending_grants() {
+        let mut s = GrantStore::new(Duration::from_secs(120));
+        s.issue("t1".into(), "WHALE-TEST-0001".into(), 5202);
+        s.issue("t2".into(), "WHALE-TEST-0002".into(), 5203);
+        s.clear_device("WHALE-TEST-0001");
+        assert_eq!(s.consume("t1", "WHALE-TEST-0001"), None);
+        assert_eq!(s.consume("t2", "WHALE-TEST-0002"), Some(5203));
+    }
+}

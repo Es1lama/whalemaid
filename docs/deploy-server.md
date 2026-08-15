@@ -33,7 +33,7 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 ## 主控端接入（编号+密码，无 IP）
 
 1. 主控端 `POST /_whalemaid/connect`（设备编号+密码，限速 5/min、错 5 次锁 5 分钟）→ 返回 `{ deviceId, service, grant, grantTtlSec, tunnelPort }`（**不含设备服务端口**，不轮换 token；SEC-003/004b）；
-2. 主控端 TLS 连接 `<服务器>:<tunnelPort>`，首行发 `GRANT <grant> <deviceId>`（2 分钟内单次消费）→ 中继校验后转发进 rathole noise 隧道 → 受控端网关侧挑战应答绑定（密码只走密文，SEC-004）；
+2. 主控端 TLS 连接 `<服务器>:<tunnelPort>`，首行发 `GRANT <grant> <deviceId>`（2 分钟内单次消费）→ 中继校验后转发进 rathole noise 隧道 → 受控端宿主原生 web（官方 /api+WS+UI，密码只走密文，SEC-004）；浏览器/WebView 用 WSS 入口 `/_whalemaid/tunnel-ws`；
 3. 设备在线状态：`GET /_whalemaid/devices/:id/status`（公开、限速，不回 IP/端口/token）。
 
 ## 运维
@@ -46,4 +46,4 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 
 - 控制面 API 是**开源**部分（AGPL-3.0）；账号/计费/Level 分层属私有仓 `whalemaid-console` 的控制管理系统，另文说明；
 - rathole 许可 Apache-2.0，随镜像分发合法；
-- 全链无明文段（SEC-004b 已闭合）：主控端→中继 = TLS（同 API 证书体系）+ 一次性 grant；中继→受控端 = rathole noise（静态密钥 + pin 公钥）；受控端内部 = 网关侧挑战应答。实测脚本 scripts/rathole-noise-e2e.mjs。
+- 全链无明文段（SEC-004b 已闭合）：主控端→中继 = TLS（同 API 证书体系）+ 一次性 grant；中继→受控端 = rathole noise（静态密钥 + pin 公钥）；受控端内部 = 宿主原生 web（127.0.0.1 默认姿态 + 官方信任栅栏）。实测脚本 scripts/rathole-noise-e2e.mjs。

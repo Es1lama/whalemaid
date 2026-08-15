@@ -35,7 +35,7 @@
 | ADR-028 | 文档治理 | 六原则：简洁、有效、时效（旧版只存 git 历史）、指导、与代码一一对应、可溯源 | PREFLIGHT §2 |
 | ADR-029 | ~~多端策略~~ **已废止** | 原"Web 先行；Android/iOS/鸿蒙后置"被 ADR-039/040 取代（移植前端 + Capacitor/Electron/Web 三壳）；保留约束：客户端只依赖公开 API、宿主插件三平台 | DESIGN §3 |
 | ADR-030 | 闭源定位 | 闭源 = **完整控制管理系统**（账号/计费/控制台/风控/工单/运营后台/Level 2），盈利性代码全部收敛于此 | DESIGN §8 |
-| ADR-031 | S0/S1 结论 | 插件形态/宿主 API/browse seam/凭据/web 路由全部静态确认可行；**直连改走插件自建 listener（选项 B）**——rc.6 CLI 拒绝 `--host 0.0.0.0`，自建 server + `toFetchHandler(ctx.apiProxy)` 不依赖官方绑定 | research/spike-S0-S1 |
+| ADR-031 | ~~S0/S1 结论~~ **已废止** | 原"直连改走插件自建 listener（选项 B）"被 audit#3 取代（插件零监听，隧道直达宿主原生 web）；静态确认结论（插件形态/browse seam/凭据）仍有效 | research/spike-S0-S1 |
 | ADR-036 | 双仓分离 | 开源（AGPL）与闭源控制台分仓；`packages/contract` 为边界（统一 API 契约，双仓共用）；社区代码进闭源仓须 CLA（ADR-027） | DESIGN §0 |
 | ADR-037 | ~~原生端策略~~ **已废止** | 原"手机端原生优先；Android(Kotlin) 本地先行、iOS(SwiftUI) 并行 + CI macOS 验证"被 ADR-039/040 取代（移植官方前端 + 三壳，D-025 定案 Capacitor/Electron/Web）；Kotlin/SwiftUI 源码已删除（git 历史备份） | DESIGN §3 |
 | ADR-038 | ~~控制端对称~~ **已废止** | 原"agent 工具控制另一主机"模型错误；由 ADR-040 取代（主控端是控制 App，非 agent 工具） | 废止于 ADR-040 |

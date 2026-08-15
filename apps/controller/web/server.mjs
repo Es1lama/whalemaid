@@ -3,6 +3,9 @@
 // 设备管理首屏（ToDesk 式：服务端地址+设备编号+密码，无 IP/端口/协议字样）+ 连接后反向代理宿主官方 UI/API/WS。
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import https from 'node:https'
 import WebSocket, { WebSocketServer } from 'ws'
 
@@ -17,8 +20,22 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj))
 }
 
-/** 中继证书指纹表（按服务端地址分别 TOFU，SEC-001 同模型） */
-const serverFingerprints = new Map()
+/** 中继证书指纹表（按服务端地址分别 TOFU，SEC-001 同模型）；落盘持久化，重启后仍固定（审计三轮#1） */
+const DATA_DIR = process.env.CONTROLLER_DATA_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '.controller-data')
+const FP_FILE = join(DATA_DIR, 'fingerprints.json')
+mkdirSync(DATA_DIR, { recursive: true })
+const serverFingerprints = new Map(Object.entries(existsSync(FP_FILE) ? JSON.parse(readFileSync(FP_FILE, 'utf8')) : {}))
+function persistFingerprints() {
+  writeFileSync(FP_FILE, JSON.stringify(Object.fromEntries(serverFingerprints), null, 2), { mode: 0o600 })
+}
+/** WSS 证书校验（审计三轮#1）：握手完成后必须与控制面指纹一致，否则断连——WSS 与 HTTPS 同身份链 */
+function assertWssFingerprint(server, ws) {
+  const cert = ws._socket?.getPeerCertificate?.(true)
+  const fp = cert?.raw ? createHash('sha256').update(cert.raw).digest('hex') : ''
+  const known = serverFingerprints.get(server)
+  if (!known) { ws.terminate(); throw new Error('该服务端尚未完成首次指纹固定（先经控制面 HTTPS 建立信任）') }
+  if (fp !== known) { ws.terminate(); throw new Error(`WSS 证书指纹与控制面不一致（防中间人）：${fp.slice(0, 12)}… ≠ ${known.slice(0, 12)}…`) }
+}
 
 /** 调中继控制面（TLS + 证书指纹固定；任何异常都走 reject，绝不抛进程级错误） */
 function relayRequest(server, path, opts = {}) {
@@ -39,7 +56,8 @@ function relayRequest(server, path, opts = {}) {
             r.destroy()
             reject(new Error(`中继证书指纹变化（防中间人）：预期 ${known.slice(0, 12)}… 实际 ${fp.slice(0, 12)}…`))
           } else if (!known) {
-            serverFingerprints.set(server, fp) // 首次 TOFU
+            serverFingerprints.set(server, fp) // 首次 TOFU（落盘，重启后继续生效）
+            persistFingerprints()
           }
         } catch (e) { r.destroy(); reject(e) }
       })
@@ -64,6 +82,7 @@ function tunnelExchange(httpText, binaryFrames = []) {
       const out = []
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('隧道超时')) }, 15_000)
       ws.on('open', () => {
+        try { assertWssFingerprint(session.server, ws) } catch (e) { clearTimeout(timer); return reject(e) }
         ws.send(`GRANT ${grant} ${session.deviceId}`)
         ws.send(httpText)
         for (const f of binaryFrames) ws.send(f)
@@ -146,8 +165,12 @@ function decodeChunked(buf) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
 
-  // 设备管理：连接接口
+  // 设备管理：连接接口（审计三轮#5：只接受本机控制器页面发起的请求，防恶意网页 CSRF）
   if (url.pathname === '/_ctrl/connect' && req.method === 'POST') {
+    const host = (req.headers.host ?? '').split(':')[0]
+    const origin = req.headers.origin
+    if (!['127.0.0.1', 'localhost'].includes(host)) return json(res, 403, { error: 'forbidden origin' })
+    if (origin && !origin.startsWith(`http://${req.headers.host}`)) return json(res, 403, { error: 'forbidden origin' })
     let body = ''
     req.on('data', (c) => body += c)
     req.on('end', async () => {
@@ -217,6 +240,7 @@ server.on('upgrade', (req, socket, head) => {
     const grant = JSON.parse(c.body).grant
     const up = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false })
     up.on('open', () => {
+      try { assertWssFingerprint(session.server, up) } catch (e) { up.terminate(); socket.destroy(); return }
       up.send(`GRANT ${grant} ${session.deviceId}`)
       // 浏览器升级请求以原始 HTTP 请求形式打进隧道（官方连接插件读 upgrade 头）
       const lines = [`${req.method} ${req.url} HTTP/1.1`, `Host: ${HOST_AUTHORITY}`, 'Connection: Upgrade', 'Upgrade: websocket', ...(req.headers['sec-websocket-key'] ? [`Sec-WebSocket-Key: ${req.headers['sec-websocket-key']}`] : []), 'Sec-WebSocket-Version: 13', '', '']

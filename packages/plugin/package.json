@@ -1,7 +1,7 @@
 {
   "name": "@whalemaid/plugin",
   "version": "0.1.0",
-  "description": "WhaleMaid 被控插件：自建 listener + 认证网关，让手机接管本机 DSH（SPEC: docs/protocol.md）",
+  "description": "WhaleMaid 被控插件：中继接入（设备编号+密码哈希注册+noise 隧道直指宿主原生 web，无自建监听）（SPEC: docs/protocol.md）",
   "type": "module",
   "main": "lib/index.js",
   "types": "src/index.ts",

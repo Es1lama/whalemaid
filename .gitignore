@@ -21,3 +21,6 @@ packages/android/local.properties
 # 中继实机测试产物（设备记录/隧道配置/自签私钥绝不入库）
 .relay-*/
 .dsh-test/
+
+# 主控端运行时状态（中继证书指纹 TOFU 等，绝不入库）
+apps/controller/web/.controller-data/

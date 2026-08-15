@@ -6,6 +6,7 @@ use crate::limiter::{Attempt, Limiter};
 use crate::rathole::{render_server_config, RatholeSidecar};
 use crate::registry::Registry;
 use axum::{
+    extract::connect_info::ConnectInfo,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
     extract::State,
@@ -31,6 +32,8 @@ pub struct AppState {
     pub install_code: String,
     /// /connect 限速与锁定（SEC-002）
     pub limiter: Mutex<Limiter>,
+    /// 仅在显式配置可信反代时解析 X-Forwarded-For（审计三轮#2：默认用 socket peer IP）
+    pub trusted_proxy: bool,
     /// rathole noise 静态密钥对（SEC-001/003）：private 只进配置文件；public 经 /tunnel 下发受控端 pin
     pub noise_private_key: String,
     pub noise_public_key: String,
@@ -46,6 +49,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_whalemaid/devices/:id/heartbeat", post(heartbeat))
         .route("/_whalemaid/devices/:id/status", get(device_status))
         .route("/_whalemaid/devices/:id/tunnel", post(tunnel))
+        .route("/_whalemaid/devices/:id/password", post(update_password))
         .route("/_whalemaid/connect", post(connect))
         .route("/_whalemaid/tunnel-ws", get(tunnel_ws))
         .with_state(state)
@@ -57,6 +61,17 @@ async fn health() -> Json<Value> {
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get("authorization")?.to_str().ok().map(|v| v.strip_prefix("Bearer ").unwrap_or(v))
+}
+
+/// 限速键信源（审计三轮#2）：默认 socket peer IP；只有 WHALEMAID_RELAY_TRUSTED_PROXY=1 时信任反代注入的 X-Forwarded-For
+fn client_ip(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> String {
+    if state.trusted_proxy {
+        if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            // 可信链末端 = 第一个（最靠近客户端的）地址
+            return v.split(',').next().unwrap_or("unknown").trim().to_string()
+        }
+    }
+    peer.map(|p| p.ip().to_string()).unwrap_or_else(|| "unknown".to_string())
 }
 
 fn unauthorized() -> (StatusCode, Json<Value>) {
@@ -74,9 +89,13 @@ async fn reload_config(s: &Arc<AppState>) -> Result<(), String> {
 }
 
 /// SEC-001：受控端首次注册——需一次性安装码；签发每设备凭据与初始隧道 token
-async fn register(State(s): State<Arc<AppState>>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     if s.install_code.is_empty() || headers.get("x-install-code").and_then(|v| v.to_str().ok()) != Some(s.install_code.as_str()) {
         return Err(unauthorized())
+    }
+    // 审计三轮#4：enrollment secret 为长期共享秘密——按 IP 限速防批量注册
+    if s.limiter.lock().await.check(&format!("register:{}", client_ip(&s, &headers, Some(peer)))) != Attempt::Allowed {
+        return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
     }
     let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -101,14 +120,14 @@ async fn register(State(s): State<Arc<AppState>>, headers: HeaderMap, body: Stri
 /// SEC-003（Codex 审计修复）：只做密码验证与寻址，**不轮换隧道 token**（token 是受控端侧固定凭据）；
 /// SEC-004b：成功后签发**短时一次性 grant**（2min、单次消费），主控端凭 grant 走 TLS 隧道入口进入 rathole 隧道；
 /// 响应**不含设备服务端口**（路由秘密不外泄），只给隧道入口端口（与 API 同主机）。
-async fn connect(State(s): State<Arc<AppState>>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let password = b.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if device_id.is_empty() || password.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "deviceId/password required" }))))
     }
-    let ip = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+    let ip = client_ip(&s, &headers, Some(peer));
     let key = format!("{ip}:{device_id}");
     match s.limiter.lock().await.check(&key) {
         Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" })))),
@@ -130,6 +149,26 @@ async fn connect(State(s): State<Arc<AppState>>, headers: HeaderMap, body: Strin
     s.grants.lock().await.issue(grant.clone(), device_id.clone(), port);
     let tunnel_port = s.config.tunnel_listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(9443);
     Ok((StatusCode::OK, Json(json!({ "deviceId": device_id, "service": service, "grant": grant, "grantTtlSec": 120, "tunnelPort": tunnel_port }))))
+}
+
+/// 密码轮换（审计三轮#3）：每设备凭据鉴权，原子替换 PHC 并吊销该设备在途 grant——旧密码立即失效
+async fn update_password(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
+    let authorized = { s.registry.lock().await.authenticate_credential(cred).map(|d| d.id == id).unwrap_or(false) };
+    if !authorized {
+        return Err(unauthorized())
+    }
+    let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
+    let digest = b.get("passwordDigest").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if digest.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "passwordDigest required" }))))
+    }
+    let updated = { s.registry.lock().await.update_password(&id, &digest) };
+    if !updated {
+        return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))
+    }
+    s.grants.lock().await.clear_device(&id);
+    Ok((StatusCode::OK, Json(json!({ "ok": true }))))
 }
 
 /// 被控端隧道签发：凭据鉴权，返回当前隧道 token（不轮换——token 一经注册固定，SEC-003）
@@ -177,8 +216,8 @@ async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::ext
 
 /// audit#4（D-026）：主控端按设备编号查询状态——Phase A 无账号，设备列表 = 主控端本机记忆 + 本端点逐个查询；
 /// 不回 IP/端口/token（DESIGN §6.3 不泄露约束）；按 IP 限速防编号枚举；未知与离线区分（registered 位）
-async fn device_status(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let ip = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+async fn device_status(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let ip = client_ip(&s, &headers, Some(peer));
     if s.limiter.lock().await.check(&format!("status:{ip}")) != Attempt::Allowed {
         return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
     }
@@ -213,8 +252,8 @@ async fn revoke(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extrac
 /// SEC-004b Web 变体（主控端 Web/Electron/Capacitor 统一入口，audit#6）：
 /// 浏览器无法开裸 TLS 隧道，故经 WSS 承载同一条 grant 管道——首个文本帧 `GRANT <token> <deviceId>`，
 /// 之后帧 = 原始字节（HTTP 请求等），双工转发到受控端 rathole 服务端口。限速 + 单次消费 + 设备绑定同裸 TLS 入口。
-async fn tunnel_ws(State(s): State<Arc<AppState>>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
-    let ip = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+async fn tunnel_ws(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+    let ip = client_ip(&s, &headers, Some(peer));
     if s.limiter.lock().await.check(&format!("tunnelws:{ip}")) != Attempt::Allowed {
         return (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))).into_response()
     }

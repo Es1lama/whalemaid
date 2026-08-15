@@ -38,25 +38,26 @@
 6. **通知**：任务完成/需审批 → 原生推送（App 内 + 系统通知）。
 7. **审批流**：官方前端的审批 UI 保留（原生），经网关收发。
 
-## 5. 认证注入点（前端零感知）
+## 5. 认证注入点（前端零感知，2026-08-15 现行版）
 
-- 网关统一拦截 `/api`：设备凭据（长期/临时 token）校验 → 失败 401 → 前端登录页接管；
-- 原生 `/api` 与 SSE 同源透传（官方 `toFetchHandler(ctx.apiProxy)` 路径，spike S1 已验证）；
-- **前端代码不改任何调用点**——它继续同源调 `/api`，只是后端从"本机"变"网关"。
+- 授权全部在中继侧：`/_whalemaid/connect`（编号+密码验证，限速/锁定）→ 单连接一次性 grant → TLS/WSS 隧道入口消费；
+- 主控端（apps/controller/web）把浏览器请求改写为**受控端宿主权威**并经隧道转发——官方信任栅栏放行同源请求（403 拒绝跨站，DNS-rebinding 防御）；
+- **前端代码不改任何调用点**——官方 UI 继续同源调 `/api` 与 WS `/api/events.mux|host`，只是承载从"本机"变为"隧道"。
 
-## 6. 废止与清理（ADR-041）
+## 6. 废止与清理（ADR-041/audit#3）
 
-- `/api/v1` 自定协议：废止；设备配对/管理最小端点（bind/revoke/list/heartbeat）并入网关原生风格路由（PROTO-010）；
+- 自定 RPC 协议：废止，**代码已删除**（routes/events/standalone/verifier/providers、packages/contract、scripts/smoke.mjs；git 历史备份）；
 - `packages/control`（agent 工具）：废止，代码**已删除**（git 历史备份 commit 9ec7fef）；
-- 自研 Android Kotlin / iOS SwiftUI 原生 UI：废止，源码**已删除**（git 历史备份 commit 9ec7fef）；插件内旧自研 PWA 构建产物 `/m` 静态服务已随本轮清仓移除。
+- 自研 Android Kotlin / iOS SwiftUI 原生 UI：废止，源码**已删除**（git 历史备份 commit 9ec7fef）；插件内旧自研 PWA 构建产物 `/m` 静态服务已随清仓移除；
+- 插件自建 listener / 网关：废止，插件零监听——隧道直指宿主原生 web 端口（audit#3）。
 
 ## 7. 里程碑
 
-1. **验证官方前端可独立构建**（spike：拉取前端包、在独立 shell 跑起来、指向网关）——决定移植细节的最大不确定点；
-2. Capacitor 壳 + 官方前端 + 登录/设备管理模块跑通（Android）；
-3. 原生桥：相机/麦克风/文件；
-4. iOS 壳（CI macOS 构建验证）+ PC 壳（Electron + Web）；
-5. 三端一致回归（ADR-039）。
+1. ✅ **官方前端独立构建**（docs/research/spike-official-frontend.md，commit 47f9438 冻结）；
+2. ✅ **Web 版主控端**（apps/controller/web：设备管理首屏+官方 UI/API/WS 隧道反代，实测闭环）+ ✅ **PC 壳**（apps/controller/electron，smoke 过）；
+3. ⬜ Capacitor 壳 + 移动适配跑通（Android）；
+4. ⬜ 原生桥：相机/麦克风/文件（D-023）；
+5. ⬜ iOS 壳（CI macOS 构建验证）+ 三端一致回归（ADR-039）。
 
 ## 8. 已定案
 

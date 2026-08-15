@@ -36,7 +36,7 @@
 
 被控插件 Node/TS（DSH 插件，三平台 macOS/Ubuntu/Windows）；中继/控制面 Rust（axum/tokio + SQLite）；传输 TLS + WebCrypto。
 
-**多端与跨平台策略（v3 定案，ADR-039/040 + D-025）**：主控端 = **移植官方 DSH web 前端（MIT）+ 移动/桌面适配**，一个前端、多个壳——**Capacitor（Android/iOS）+ Electron（PC）+ Web**（D-025 定案，PC 双供，无 Tauri）；不做自研 UI。受控端 = 能跑 DSH 的任意端 + 插件（未来安卓端自动成立，因为是插件）。服务端 = 流量转接（中继 + 账号分层）。统一契约：主控端同源调 DSH 原生 `/api`（经网关打到受控端）+ 网关最小端点，见 docs/protocol.md（PROTO-010）。
+**多端与跨平台策略（v3 定案，ADR-039/040 + D-025）**：主控端 = **移植官方 DSH web 前端（MIT）+ 移动/桌面适配**，一个前端、多个壳——**Capacitor（Android/iOS）+ Electron（PC）+ Web**（D-025 定案，PC 双供，无 Tauri）；不做自研 UI。受控端 = 能跑 DSH 的任意端 + 插件（未来安卓端自动成立，因为是插件）。服务端 = 流量转接（中继 + 账号分层）。统一契约：主控端同源调 DSH 原生 `/api`（经中继隧道直达受控端宿主原生 web，见 docs/protocol.md）。
 
 ## §4 服务分层
 

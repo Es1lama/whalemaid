@@ -65,3 +65,62 @@
 5. **中：官方前端 spike 不是仓库内交付物。** spike 依赖 clone 官方仓和外部构建，仓库没有 `apps/controller/web` vendor dist、LICENSE/THIRD_PARTY_NOTICES、壳工程或 WebSocket 桥。证据：`docs/research/spike-official-frontend.md:7-9`、`docs/research/spike-official-frontend.md:25-30`、`apps/controller/DESIGN.md`。建议：以冻结 commit 生成可审计 vendor 产物，锁定来源与许可证，再接入最小 Capacitor/Electron/Web 构建。
 6. **中：协议文档仍把事件承载写成 SSE，与实测官方载体 WS 不一致。** `protocol.md` 的 PROTO-001 写 HTTP(S)+SSE、`/api/events`，spike 明确官方 web 载体使用 `/api/events.mux` 与 `/api/events.host` WebSocket。证据：`docs/protocol.md:9-18`、`docs/research/spike-official-frontend.md:13-18`。建议：按官方真实 wire contract 重写事件章节，明确中继透传 WS、主控 Web 版桥接方案和兼容边界；不要让主控端按过时 SSE 路径实现。
 7. **中：守卫无法证明“污染清仓”。** 守卫只扫描 `packages apps docs` 的指定扩展，排除 `lib/dist/target`，且允许 docs 含废止语义；因此 `pnpm-lock.yaml` 的 `packages/control`、生成物中的 Kotlin 字符串不会触发。证据：`.github/scripts/check-banned-terms.sh:21-32`、`pnpm-lock.yaml:24`、`packages/plugin/lib/index.js:407-409`。建议：将 lockfile、构建清单、源码生成物纳入可复现扫描；对“历史文档”使用目录级白名单，不要以全文语义自动豁免。
+
+## 增量审计（第三轮，2026-08-15 晚）
+
+审计基准：`docs/OWNER-DIRECTIVES.md:64-74` 的 D-020..D-030 原文。结论只评价当前工作区实际代码、现行文档和可重复静态/单元验证，不把主代理口头说明当证据。
+
+### D-020..D-030 逐条判定
+
+- D-020【未对齐】“一个前端、多个壳”和远程控制模型已经落到 Web/Electron，但 Android/iOS 主控端尚无工程，移动端代码复用与移动实机体验仍未交付。证据：`docs/native-app-plan.md:3-8`、`docs/native-app-plan.md:19-23`、`docs/native-app-plan.md:55-59`、`docs/remote-ux-spec.md:40-43`。剩余差距：交付 Capacitor Android/iOS 壳并以同一官方前端完成移动端全链实机验收。
+- D-021【对齐】已停止 Kotlin/SwiftUI 自研路线，主控运行时直接使用宿主官方 UI，Electron 仅作为同源壳；当前代码树的废止词守卫执行通过。证据：`docs/native-app-plan.md:47-51`、`apps/controller/web/server.mjs:177-202`、`apps/controller/electron/main.cjs:47-58`、`.github/scripts/check-banned-terms.sh:8-29`。剩余差距：尚无移动端用户级对照，不能证明手机体验已接近原生 DSH/ToDesk。
+- D-022【对齐】前端调用点不改：主控把浏览器请求改写为宿主权威并经 WSS 隧道送到受控端；插件隧道目标直接是宿主 `webServer.port`，没有自定 RPC 网关。证据：`apps/controller/web/server.mjs:78-88`、`apps/controller/web/server.mjs:177-202`、`packages/plugin/src/index.ts:30-48`、`docs/protocol.md:11-17`。剩余差距：官方 vendor dist 当前不是运行时入口，而是由受控端宿主返回 UI；移动壳仍未验证这一模式。
+- D-023【未对齐】PC Electron 壳和服务器转接已存在，官方目录能力可经原生 `/api` 到达；但相机/相册、麦克风、文件原生桥均未实现，Android/iOS App 也未交付。证据：`apps/controller/electron/main.cjs:47-58`、`docs/protocol.md:36-44`、`docs/native-app-plan.md:31-39`、`docs/remote-ux-spec.md:42-43`。剩余差距：完成 Capacitor 壳、原生媒体/文件桥和真实设备验收。
+- D-024【对齐】三端实体与职责已经成立：受控端是 DSH+插件，中继负责注册/授权/转发，主控端 Web/Electron 无需 DSH 并反代官方 UI/API/WS。证据：`packages/plugin/src/index.ts:26-73`、`packages/relay/src/api.rs:41-50`、`apps/controller/web/server.mjs:146-234`、`apps/controller/electron/main.cjs:25-58`。剩余差距：Android/iOS/鸿蒙实体和原生 SDK 差异尚未落地。
+- D-025【对齐】方案明确 Capacitor + Electron + Web，且 PC 的 Web 与 Electron 两种入口均已有代码；Electron 静态检查通过。证据：`docs/native-app-plan.md:15-23`、`apps/controller/web/package.json:1-15`、`apps/controller/electron/package.json:1-16`、`apps/controller/electron/main.cjs:47-58`。剩余差距：Capacitor 只有选型，没有工程产物。
+- D-026【未对齐】编号+密码→状态检查→验密→grant→WSS/TLS→受控端官方 UI 的无 IP 闭环已经存在；但首屏仍要求用户填写服务端地址和设备编号，没有“登录后自动设备列表/可选进程”，移动端流程也不存在。证据：`apps/controller/web/server.mjs:104-123`、`apps/controller/web/server.mjs:149-168`、`packages/relay/src/api.rs:100-132`、`docs/remote-ux-spec.md:11-15`。剩余差距：增加账号/授权范围设备列表、在线刷新和移动端秒连流程；服务端地址应进入部署/高级设置而非日常连接表单。
+- D-027【对齐】当前实现复用 rathole Noise、Rustls、官方 DSH UI/API/WS 和 Electron 壳，没有重造隧道或业务 RPC；安全文档保留成熟实现对照，Noise/grant/指纹攻击路径脚本存在。证据：`docs/security-audit.md:3-11`、`packages/relay/src/rathole.rs:35-48`、`packages/plugin/src/index.ts:30-48`、`scripts/rathole-noise-e2e.mjs:18-49`。剩余差距：后述新安全问题表明“先学习后构建”尚未覆盖反向代理与反向代理头信任边界。
+- D-028【未对齐】本轮确实完成了 `/api/v1` 全链同类清除，但同一轮仍遗漏主控 WSS 证书固定、可伪造的 `x-forwarded-for` 限速键、失效的密码轮换路径，以及多份现行文档中的旧网关/SSE语义，说明“代表性问题触发同类全查”未稳定执行。证据：`apps/controller/web/server.mjs:20-43`、`apps/controller/web/server.mjs:63-74`、`packages/relay/src/api.rs:111-123`、`packages/plugin/src/store.ts:65-70`、`docs/native-app-plan.md:41-49`。剩余差距：对认证、证书、来源 IP、凭据更新和文档映射分别建立全链检查表与回归测试。
+- D-029【未对齐】Noise、控制面 TLS、受控端指纹固定、scrypt、grant 和回环服务端口均已实现，但主控 WSS 明确关闭 CA 校验且未做指纹比较，`/connect`/状态/WSS 限速直接信任客户端可控的 `x-forwarded-for`，长期密码轮换也不会更新服务端哈希；不能评价为肉鸡风险已闭合。证据：`apps/controller/web/server.mjs:63-74`、`apps/controller/web/server.mjs:218-229`、`packages/relay/src/api.rs:104-123`、`packages/relay/src/api.rs:178-183`、`packages/plugin/src/store.ts:65-70`、`packages/relay/src/registry.rs:103-126`。剩余差距：先修复下文三个高优先级问题，再做主控产品路径的错误证书、爆破、轮换与吊销攻击测试。
+- D-030【未对齐】`/api/v1`、`packages/contract`、旧路由/provider 源码和 `scripts/smoke.mjs` 已删除，守卫当前执行通过；但“唯一现行版”仍保留自建网关、挑战应答、SSE、主控 App 未开始等失效语义，插件包描述甚至仍写“自建 listener + 认证网关”，守卫又排除 `lib/dist/vendor-dist/target`，不能证明污染源已清仓。证据：`.github/scripts/check-banned-terms.sh:21-29`、`packages/plugin/package.json:1-7`、`docs/PREFLIGHT.md:38-50`、`docs/native-app-plan.md:41-49`、`docs/deploy-server.md:33-49`、`docs/remote-ux-spec.md:59-61`。剩余差距：删除/改写全部现行旧语义，守卫改为检查语义与可复现生成物，而非只检查少量关键词。
+
+### 前两轮十五条建议状态
+
+#### 第一轮八条
+
+1. **部分修复**：受控端空指纹拒绝、HTTPS 指纹固定、显式 Noise、静态公钥 pin 和错误指纹/公钥脚本已完成；主控 WSS 仍以 `rejectUnauthorized:false` 直连且未比较指纹。证据：`packages/plugin/src/index.ts:34-40`、`packages/plugin/src/relay.ts:52-81`、`packages/plugin/src/relay.ts:143-160`、`scripts/rathole-noise-e2e.mjs:113-127`、`apps/controller/web/server.mjs:63-74`。
+2. **部分修复**：唯一架构已改为官方前端 + Capacitor/Electron/Web，旧移动源码和 `/api/v1` 已删；但 `native-app-plan`、`PREFLIGHT`、`PRODUCT_DESIGN` 仍混入网关/SSE/PROTO-010 旧语义。证据：`docs/native-app-plan.md:3-8`、`docs/native-app-plan.md:41-49`、`docs/PREFLIGHT.md:38-50`、`docs/PRODUCT_DESIGN.md:39`。
+3. **已修复**：自定 RPC 网关与 `packages/contract` 已删除；插件只把 rathole `local_addr` 指向宿主官方 web，协议唯一业务面为官方 `/api`+WS。证据：`packages/plugin/src/index.ts:30-48`、`packages/plugin/src/relay.ts:147-166`、`docs/protocol.md:9-17`。
+4. **部分修复**：无 IP 的编号+密码连接与 Web 首屏已闭环，离线/未知/错密有提示；账号范围设备列表、自动发现、吊销/重连 UI 和移动端流程未完成。证据：`apps/controller/web/server.mjs:104-123`、`apps/controller/web/server.mjs:149-168`、`docs/remote-ux-spec.md:11-15`、`docs/remote-ux-spec.md:31-34`。
+5. **部分修复**：官方前端冻结产物、Web 主控和 Electron 壳已交付；Capacitor、相机/相册、麦克风、文件原生桥未交付，vendor dist 也未作为运行时主控前端。证据：`apps/controller/web/provenance.json:1-9`、`apps/controller/web/README.md:6-19`、`apps/controller/electron/main.cjs:47-58`、`docs/native-app-plan.md:55-59`。
+6. **已修复**：`/connect` 不再轮换/下发 rathole token，改签 TTL 2 分钟、单次消费、绑定设备的 grant；单测覆盖重用、伪造、过期、跨设备。证据：`packages/relay/src/api.rs:100-132`、`packages/relay/src/grants.rs:22-44`、`packages/relay/src/grants.rs:55-90`。
+7. **部分修复**：语音/视觉已从当前 RPC 能力移到未实现的 client-module 里程碑，旧 voice/vision provider 已删；但 `packages/hotwords` 的 DashScope 模式仍可选且运行时直接抛“待真实 key 实测”，PREFLIGHT 仍把热词列为 V1 范围。证据：`docs/protocol.md:36-40`、`packages/hotwords/src/upload.ts:25-34`、`packages/hotwords/src/index.ts:14-23`、`docs/PREFLIGHT.md:51-63`。
+8. **部分修复**：旧 `/api/v1` 代码、contract、lockfile 引用和主插件生成物已清理，守卫无代码文件豁免并执行通过；但守卫排除已跟踪的生成目录，且未发现“自建 listener/网关/SSE”等同义污染。证据：`.github/scripts/check-banned-terms.sh:2-29`、`packages/plugin/package.json:1-7`、`docs/native-app-plan.md:41-49`。
+
+#### 第二轮七条新问题
+
+1. **已修复**：生产 compose 已发布 9443，并设置 `WHALEMAID_RELAY_TUNNEL_LISTEN=0.0.0.0:9443`；Dockerfile 也暴露 9443，默认配置仍保留回环防误暴露。证据：`packages/relay/src/config.rs:20-29`、`packages/relay/src/main.rs:30-33`、`packages/relay/docker-compose.yml:7-15`、`packages/relay/Dockerfile:19-22`。
+2. **已修复（原问题范围）**：E2E 脚本会先取得服务端指纹，控制面和裸 TLS 隧道均逐连接比较，并包含错误指纹拒绝断言。证据：`scripts/rathole-noise-e2e.mjs:18-49`、`scripts/rathole-noise-e2e.mjs:113-116`。产品主控 WSS 的新缺口另列下文。
+3. **已修复**：旧 `/api/v1` 运行时代码、routes/events/standalone/verifier/providers、`packages/contract` 和 `scripts/smoke.mjs` 均已从现行树移除；主插件构建产物未检出 `/api/v1`。证据：`packages/plugin/src/index.ts:1-11`、`packages/plugin/package.json:14-17`、`.github/scripts/check-banned-terms.sh:2-8`。
+4. **已修复**：UX 文档已把状态查询、编号+密码、grant、TLS/Noise、官方 UI 闭环回写为已实现/部分实现，不再声称当前必须填写受控端 IP。证据：`docs/remote-ux-spec.md:11-15`、`docs/remote-ux-spec.md:21-34`、`docs/remote-ux-spec.md:40-43`。
+5. **部分修复**：官方 dist、LICENSE、THIRD_PARTY_NOTICES、provenance、Web 主控和 Electron 壳均已入库；Capacitor 仍无工程，且 vendor dist 只作合规存档、运行时 UI 实际来自受控端。证据：`apps/controller/web/provenance.json:1-9`、`apps/controller/web/THIRD_PARTY_NOTICES.md:1-10`、`apps/controller/web/README.md:14-19`、`apps/controller/electron/main.cjs:47-58`。
+6. **已修复**：协议已改为官方 WebSocket `/api/events.mux`、`/api/events.host`，主控也实现对应 upgrade 隧道桥。证据：`docs/protocol.md:9-17`、`apps/controller/web/server.mjs:209-232`。
+7. **部分修复**：守卫已纳入 `pnpm-lock.yaml` 并取消旧源码豁免，当前执行通过；但仍显式排除 `lib/dist/vendor-dist/target`，且关键词集合无法识别旧“网关/SSE/挑战应答”语义。证据：`.github/scripts/check-banned-terms.sh:8-29`、`packages/plugin/package.json:1-7`、`docs/PREFLIGHT.md:38-50`。
+
+### 新问题（按安全优先）
+
+1. **高：主控 WSS 隧道未执行证书指纹固定，控制面 TOFU 也只存在进程内存。** HTTPS 请求会把首次证书指纹放入内存 Map，但两个 WSS 建连点仅设置 `rejectUnauthorized:false`，没有复用 Map 或校验证书；进程重启后 Map 清空，首次连接会无提示接受任意证书。攻击者可在 WSS 路径截获一次性 grant 并代理/抢用连接。证据：`apps/controller/web/server.mjs:20-43`、`apps/controller/web/server.mjs:53-74`、`apps/controller/web/server.mjs:214-229`。建议：统一封装 HTTPS/WSS pin 校验；指纹由用户显式录入或首次确认后持久化，禁止静默 TOFU；增加错误 WSS 证书、重启后证书变化和 grant 抢用测试。
+2. **高：公网控制面直接信任客户端提供的 `x-forwarded-for`，爆破/枚举限速可被任意绕过。** `/connect`、设备状态和 WSS 隧道都以该头作为限速键；compose 直接发布 9080，未见受信反代边界或真实 peer IP 提取，攻击者每次更换头值即可获得新预算。证据：`packages/relay/src/api.rs:104-123`、`packages/relay/src/api.rs:178-183`、`packages/relay/src/api.rs:213-219`、`packages/relay/docker-compose.yml:7-15`。建议：默认使用 socket peer IP；只有在显式配置可信代理 CIDR 时解析 `Forwarded/X-Forwarded-For`，且取可信链末端；增加伪造头仍触发 429/423 的集成测试。
+3. **高：长期密码轮换路径实际失效，旧密码继续有效。** 插件轮换只生成新密码并清空设备凭据，随后用原 deviceId 重新注册；服务端对同一未吊销 deviceId 直接返回 `device-already-registered`，没有更新 password digest 的端点，因此旧哈希仍留在注册表。证据：`packages/plugin/src/store.ts:65-70`、`packages/plugin/src/relay.ts:91-119`、`packages/relay/src/registry.rs:103-126`、`packages/relay/src/registry.rs:135-142`。建议：新增凭据鉴权的密码更新/轮换端点，原子替换 PHC 并吊销现有 grants；或先自吊销再重新注册但必须处理端口/token 生命周期；增加“旧密码立即失败、新密码成功、在途 grant 失效”测试。
+4. **中高：所谓“一次性安装码”是可无限复用的静态共享秘密。** 中继从环境读取固定 `ADMIN_INSTALL_CODE`，注册接口只做字符串相等判断，成功后不消费、不轮换；一旦泄露，攻击者可持续注册任意新 deviceId 并消耗端口/注册表。证据：`packages/relay/src/main.rs:34-35`、`packages/relay/src/api.rs:76-97`、`docs/deploy-server.md:8-10`。建议：改为可消费安装令牌（哈希存储、TTL、次数上限）或明确更名为长期 enrollment secret 并配合注册限速/配额；注册成功后默认失效并提供管理员生成新码流程。
+5. **中：本地主控端使用全进程单一会话，且控制接口无 Origin/CSRF/Host 校验。** 任意本机浏览器标签页共享 `session.server/deviceId/password`；`/_ctrl/connect` 接收 JSON 后立即改写全局会话，未验证请求来源。恶意网页可探测 localhost 并尝试改变控制目标，Electron 与 Web 也共用固定 3210 端口。证据：`apps/controller/web/server.mjs:9-13`、`apps/controller/web/server.mjs:146-175`、`apps/controller/web/server.mjs:234`、`apps/controller/electron/main.cjs:8-9`。建议：使用随机本地端口、每进程不可猜 CSRF token和严格 Host/Origin 检查；会话按安全 cookie/浏览器实例隔离，密码不要放全局共享对象；Electron 使用独立 session partition。
+6. **中：冻结的官方 vendor dist 不控制实际运行版本，交付物不可复现。** provenance 冻结 47f9438，但 README 明确 vendor 仅作合规存档，运行时 UI 由受控端宿主动态提供；主控行为会随受控端 DSH 版本变化，无法用仓内冻结产物复现或回归。证据：`apps/controller/web/provenance.json:1-9`、`apps/controller/web/README.md:14-19`、`apps/controller/web/server.mjs:174-202`。建议：明确二选一：要么主控实际托管冻结 dist 并只代理 `/api`/WS，要么删除“冻结运行时前端”表述并建立宿主版本兼容矩阵与协商/拒绝策略。
+7. **中：现行文档仍包含已删除安全模型和错误进度，违反唯一现行版。** PRELIGHT 仍以挑战应答网关和 SSE 描述冒烟/剩余项，native-app-plan 仍写网关拦截 `/api`、SSE、PROTO-010，deploy-server/security-audit 仍写受控端网关挑战应答，插件包描述仍称自建 listener。证据：`docs/PREFLIGHT.md:38-50`、`docs/native-app-plan.md:41-49`、`docs/deploy-server.md:33-49`、`docs/security-audit.md:20-32`、`packages/plugin/package.json:1-7`。建议：以 protocol v3 为唯一源批量重写上述段落；CI 增加语义断言（现行文档不得出现“网关挑战应答/SSE/自建 listener/PROTO-010”），而非仅关键词黑名单。
+
+### 本轮验证
+
+- `pnpm --dir packages/plugin test`：5/5 通过；`pnpm --dir packages/plugin typecheck`：通过。
+- `CARGO_HOME=$PWD/.toolchain/cargo cargo test --offline --manifest-path packages/relay/Cargo.toml`：18/18 通过。
+- `pnpm --dir apps/controller/web test`、`pnpm --dir apps/controller/electron test`：均通过 Node 语法检查。
+- `bash .github/scripts/check-banned-terms.sh`：通过；该结果只证明当前脚本覆盖范围内无命中，不覆盖本节指出的语义污染与排除目录。
+- 未启动任何服务，未访问或修改 `127.0.0.1:3080`。

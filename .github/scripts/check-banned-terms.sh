@@ -5,8 +5,8 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-PATTERN='Kotlin|SwiftUI|全自研|Tauri|/api/v1|packages/control'
-ALLOWLIST_DOCS='docs/OWNER-DIRECTIVES.md|docs/codex-audit.md'
+PATTERN='Kotlin|SwiftUI|全自研|Tauri|/api/v1|packages/control|自建 listener|挑战应答|PROTO-010|SSE 事件流'
+ALLOWLIST_DOCS='docs/OWNER-DIRECTIVES.md|docs/codex-audit.md|docs/research/spike-S0-S1.md'
 
 fail=0
 

@@ -38,7 +38,7 @@
 ### 实机测试结论（2026-08-15，独立实例 3181，3080 会话本体全程无恙）
 
 - 插件在真实 DSH host 挂载成功（`apply(ctx, config)` 惯例、`sessions` 复数签名、RpcRequest/RpcResponse 纪律透传）；
-- 接口级冒烟 7/7：handshake → 挑战应答绑定 → 网关拒无 token → session.list 真实透传 → 坏凭据拒绝 → browse 目录浏览 → 全盘范围策略拒绝；
+- 接口级冒烟（网关时代记录，已随自定 RPC 废止；现行验证见 scripts/rathole-noise-e2e.mjs 与 apps/controller/web 实测闭环）：
 - 关键修复沉淀：信封解包、WebCrypto P1363 验签、nonce 绑定公钥、目录选择器 pin browse（禁用 auto 行 + 插入 browse 行）。
 
 ### M1 剩余（测试 loop 继续）
@@ -47,7 +47,7 @@
 - ✅ REQ-008 permission.get/set 透传（projections 基线 + /permission 命令）；
 - ⬜ 主控端 App（ADR-039 移植前端）：官方前端独立构建 spike → Capacitor/Electron/Web 三壳 → 设备管理模块（ToDesk 式首屏）；旧自研移动 UI 已废止删除，不恢复；
 - ✅ 受控端插件（audit#3 收尾）：不自建任何 listener——隧道直指宿主原生 web 端口（官方 /api+WS+UI 唯一载体）；设备自动注册+心跳+断线重连实测；自定 RPC/网关/PWA 已全部废止删除；
-- ⬜ SSE 事件桥：已注册 host/session-status，事件流量验证需主控端实测；
+- ✅ 事件下联：官方 WS `/api/events.mux|host` 经主控端隧道桥实测可建立（SSE 事件流已随自定 RPC 废止）；
 - ⬜ workspace.create 冒烟已验证（8/8）；语音/视觉/热词 = V1 范围（REQ-020..022）；
 - ⬜ 精确 HistoryEntry 渲染与模型 provider 分组目录（骨架级提取，待对齐类型）。
 
@@ -58,7 +58,7 @@
 | S0 | **承载选择**：手机浏览器直连宿主 web 实测 | ✅ 结论：rc.6 CLI 拒绝 `--host 0.0.0.0` 与自建 listener 路线均废止——受控端走中继隧道直达宿主原生 web（127.0.0.1 默认姿态），实测闭环 | 
 | S1 | DSH 插件注册 web 路由 + 调宿主 API（browse seam、`workspace.create`、`dsh-credentials`） | ✅ 静态：全部接口确认（见 research/spike-S0-S1.md）；实机待 M1 |
 | S2 | rathole（Rust）服务端/客户端实测：noise 握手、授权语义、sidecar 管理可行性 | ✅ sidecar 定案（热重载增删设备条目、吊销=移除条目）；ADR-032 |
-| S3 | PWA WebCrypto 密钥对：生成/持久化/不可导出 | ✅ 方案确认（ECDSA P-256 + IndexedDB + 挑战应答）；实机 M1；ADR-033 |
+| S3 | ~~PWA WebCrypto 密钥对~~ **已废止** | 挑战应答绑定随自定 RPC 删除；授权全在中继侧（/connect + grant），无客户端密钥对需求 |
 | S4 | DashScope 定制热词 API：鉴权 + 批量增删 | ✅ 文档级确认（vocabulary HTTP API + vocabulary_id）；真实 key 实测留 Phase B；ADR-034 |
 | S5 | DeepSeek-OCR / 通义 VL 调用 | ✅ 确认（deepseek-ocr guides 存在；qwen-vl-max/plus）；ADR-035 |
 

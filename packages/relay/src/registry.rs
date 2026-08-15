@@ -142,6 +142,16 @@ impl Registry {
         }
     }
 
+    /// 密码轮换：凭据鉴权后原子替换 PHC（审计三轮#3——旧哈希立即失效）
+    pub fn update_password(&mut self, device_id: &str, new_password_digest: &str) -> bool {
+        let Some(dev) = self.devices.iter_mut().find(|d| d.id == device_id && !d.revoked) else {
+            return false;
+        };
+        dev.password_digest = new_password_digest.to_string();
+        let _ = self.persist();
+        true
+    }
+
     pub fn active(&self) -> impl Iterator<Item = &DeviceRecord> {
         self.devices.iter().filter(|d| !d.revoked)
     }
@@ -239,6 +249,18 @@ mod tests {
         let mut reg = temp_registry();
         reg.register("whale-test-dddd", &hash_password("pw").unwrap()).unwrap();
         assert!(reg.register("whale-test-dddd", &hash_password("pw").unwrap()).is_err());
+    }
+
+    /// 密码轮换（审计三轮#3）：旧密码立即失效、新密码可验、未知设备失败
+    #[test]
+    fn password_rotation_replaces_digest() {
+        let mut reg = temp_registry();
+        let (rec, _, _) = reg.register("whale-test-pppp", &hash_password("old-pw").unwrap()).unwrap();
+        assert!(reg.verify_device_password("whale-test-pppp", "old-pw").is_some());
+        assert!(reg.update_password(&rec.id, &hash_password("new-pw").unwrap()));
+        assert!(reg.verify_device_password("whale-test-pppp", "old-pw").is_none()); // 旧密码立即失效
+        assert!(reg.verify_device_password("whale-test-pppp", "new-pw").is_some());
+        assert!(!reg.update_password("ghost", &hash_password("x").unwrap()));
     }
 
     #[test]

@@ -88,6 +88,33 @@ export class RelayClient {
 
   constructor(private cfg: RelayClientConfig, private log: (msg: string) => void) {}
 
+  /** 密码轮换（审计三轮#3）：凭据鉴权调 /password 端点原子替换 PHC——旧密码立即失效，凭据不丢、隧道不断；
+   *  端点不可用（旧版中继）时退回：自吊销 + 重新注册（旧密码随之失效） */
+  async rotatePassword(newPassword: string): Promise<void> {
+    const base = this.cfg.relayUrl.replace(/\/$/, '')
+    if (!this.cfg.savedCredential) {
+      this.log('[whalemaid] 无中继凭据，跳过在线轮换（下次注册用新密码）')
+      return
+    }
+    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.cfg.savedCredential}` },
+      body: JSON.stringify({ passwordDigest: phcScrypt(newPassword) }),
+      fingerprint: this.cfg.relayFingerprint,
+    })
+    if (res.status < 300) {
+      this.log('[whalemaid] 长期密码已轮换（服务端 PHC 原子替换，旧密码立即失效）')
+      return
+    }
+    this.log(`[whalemaid] /password 端点不可用（${res.status}），退回自吊销+重注册`)
+    await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${this.cfg.savedCredential}` },
+      fingerprint: this.cfg.relayFingerprint,
+    }).catch(() => void 0)
+    this.cfg.onCredential('')
+  }
+
   async start(): Promise<RelayBinding> {
     const base = this.cfg.relayUrl.replace(/\/$/, '')
     let credential = this.cfg.savedCredential

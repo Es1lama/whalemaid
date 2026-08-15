@@ -1,6 +1,7 @@
 // SPEC: docs/protocol.md PROTO-003 受控端持久状态：设备编号 + 长期密码 + 中继凭据（授权在中继侧，宿主本地不再保存配对状态）
 // SPEC: docs/threat-model.md TM-003（凭据落盘 0600；不存明文 token 之外的任何会话状态）
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { generateDeviceId, generatePassword } from './device.js'
@@ -12,6 +13,8 @@ export interface StoreState {
   deviceId: string
   /** 服务端签发的每设备凭据（自动注册后保存，SEC-001） */
   relayCredential: string
+  /** 受控端本地管理令牌（密码轮换等本机操作；启动生成，打印到宿主日志） */
+  adminToken: string
 }
 
 export class Store {
@@ -29,8 +32,10 @@ export class Store {
           longPassword: generatePassword(),
           deviceId: generateDeviceId(),
           relayCredential: '',
+          adminToken: randomBytes(16).toString('hex'),
         }
     this.state.relayCredential ??= ''
+    this.state.adminToken ??= randomBytes(16).toString('hex')
     this.state.deviceId ??= generateDeviceId()
     this.state.longPassword ??= generatePassword()
     this.persist() // 初始状态（含生成的长期密码与设备编号）立即落盘
@@ -55,6 +60,10 @@ export class Store {
 
   get relayCredential(): string {
     return this.state.relayCredential
+  }
+
+  get adminToken(): string {
+    return this.state.adminToken
   }
 
   setRelayCredential(value: string): void {
