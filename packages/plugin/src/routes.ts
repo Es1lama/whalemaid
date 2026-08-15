@@ -70,6 +70,12 @@ export interface HostApiProxy {
     listDirectory(r: { rpcId: string; payload: { path?: string } }, signal: AbortSignal): Promise<HostResult<unknown>>
     createDirectory(r: { rpcId: string; payload: { path: string; name: string } }): Promise<HostResult<unknown>>
   }
+  /** 宿主审批应答（approvals 域：echo 稳定 rpcId 的 client-response） */
+  respond(message: {
+    type: 'client-response'
+    rpcId: string
+    result: { ok: true; value: { sessionId: string; approvalId: string; outcome: 'allowed-once' | 'rejected' } }
+  }): Promise<{ accepted: boolean; reason?: string }>
 }
 
 /** 无需 Bearer 的公开方法（PROTO-003） */
@@ -123,16 +129,14 @@ export interface RouterDeps {
   caps: string[]
 }
 
-/** 挑战-应答验签（TM-004）：ECDSA P-256，WebCrypto IEEE P1363 裸签名 */
+/** 挑战-应答验签（TM-004）：ECDSA P-256，优先 IEEE P1363 裸签名（Web/iOS/Android 归一化），DER 兜底 */
 function verifyNonceSignature(jwk: JsonWebKey, nonce: string, signatureB64: string): boolean {
   try {
     const key = createPublicKey({ key: jwk as never, format: 'jwk' })
-    return cryptoVerify(
-      'sha256',
-      Buffer.from(nonce, 'utf8'),
-      { key, dsaEncoding: 'ieee-p1363' },
-      Buffer.from(signatureB64, 'base64'),
-    )
+    const data = Buffer.from(nonce, 'utf8')
+    const sig = Buffer.from(signatureB64, 'base64')
+    if (cryptoVerify('sha256', data, { key, dsaEncoding: 'ieee-p1363' }, sig)) return true
+    return cryptoVerify('sha256', data, key, sig)
   } catch {
     return false
   }
@@ -213,6 +217,14 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
             return fail(res, rpcId, ERROR_CODES.authFailed, 'nonce missing, expired or mismatched')
           }
           if (!verifyNonceSignature(taken.publicKeyJwk, p.nonce, p.nonceSignature)) {
+            const dbg = {
+              nonceLen: p.nonce.length,
+              sigLen: Buffer.from(p.nonceSignature, 'base64').length,
+              x: String((taken.publicKeyJwk as { x?: string }).x).slice(0, 16),
+              y: String((taken.publicKeyJwk as { y?: string }).y).slice(0, 16),
+              sigHex: Buffer.from(p.nonceSignature, 'base64').subarray(0, 8).toString('hex'),
+            }
+            console.error('[whalemaid-debug] bind verify fail', JSON.stringify(dbg))
             return fail(res, rpcId, ERROR_CODES.authFailed, 'bad signature')
           }
           if (!verifier.checkPassword(p.password)) {
@@ -296,6 +308,18 @@ export function makeRouter(deps: RouterDeps): (req: IncomingMessage, res: Server
           return passThrough(res, rpcId, () =>
             apiProxy.host.createDirectory({ rpcId, payload: payload as { path: string; name: string } }),
           )
+        case 'approval.respond': {
+          const p = payload as { rpcId?: string; sessionId?: string; approvalId?: string; outcome?: 'allowed-once' | 'rejected' }
+          if (!p.rpcId || !p.sessionId || !p.approvalId || (p.outcome !== 'allowed-once' && p.outcome !== 'rejected')) {
+            return fail(res, rpcId, ERROR_CODES.badRequest, 'rpcId/sessionId/approvalId/outcome required')
+          }
+          const receipt = await apiProxy.respond({
+            type: 'client-response',
+            rpcId: p.rpcId,
+            result: { ok: true, value: { sessionId: p.sessionId, approvalId: p.approvalId, outcome: p.outcome } },
+          })
+          return ok(res, rpcId, receipt)
+        }
         case 'voice.transcribe': {
           if (!adapters?.voice) return fail(res, rpcId, ERROR_CODES.capUnsupported, 'voice BYOK 未配置（宿主未设置 voiceProvider/凭据）')
           const p = payload as { audioBase64?: string; format?: string }

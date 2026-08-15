@@ -15,7 +15,10 @@ import java.io.BufferedReader
 
 class ProtocolClient(val base: String) {
   var token: String? = null
-  private val client = OkHttpClient.Builder().build()
+  private val client = OkHttpClient.Builder()
+    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+    .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+    .build()
   private val json = Json { ignoreUnknownKeys = true }
 
   private val jsonMedia = "application/json; charset=utf-8".toMediaType()
@@ -59,6 +62,10 @@ class ProtocolClient(val base: String) {
     call("session.selectModel", mapOf("sessionId" to sessionId, "provider" to provider, "model" to model, "reasoningEffort" to reasoningEffort))
   fun permissionGet(sessionId: String): JsonObject = call("permission.get", mapOf("sessionId" to sessionId))
   fun permissionSet(sessionId: String, value: String): JsonObject = call("permission.set", mapOf("sessionId" to sessionId, "value" to value))
+
+  /** 审批应答（REQ-008）：回显宿主稳定 rpcId */
+  fun approvalRespond(rpcId: String, sessionId: String, approvalId: String, outcome: String): JsonObject =
+    call("approval.respond", mapOf("rpcId" to rpcId, "sessionId" to sessionId, "approvalId" to approvalId, "outcome" to outcome))
 
   // 工作区/目录（PROTO-007）
   fun workspaceList(): JsonObject = call("workspace.list", emptyMap())

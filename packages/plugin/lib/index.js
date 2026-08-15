@@ -284,6 +284,9 @@ var EventHub = class {
       connection: "keep-alive"
     });
     res.write("retry: 3000\n\n");
+    for (const frame of this.history) res.write(`data: ${JSON.stringify(frame)}
+
+`);
     this.subscribers.add(res);
     res.on("close", () => this.subscribers.delete(res));
   }
@@ -358,12 +361,10 @@ function readBody(req, limit = 1024 * 1024) {
 function verifyNonceSignature(jwk, nonce, signatureB64) {
   try {
     const key = createPublicKey({ key: jwk, format: "jwk" });
-    return cryptoVerify(
-      "sha256",
-      Buffer.from(nonce, "utf8"),
-      { key, dsaEncoding: "ieee-p1363" },
-      Buffer.from(signatureB64, "base64")
-    );
+    const data = Buffer.from(nonce, "utf8");
+    const sig = Buffer.from(signatureB64, "base64");
+    if (cryptoVerify("sha256", data, { key, dsaEncoding: "ieee-p1363" }, sig)) return true;
+    return cryptoVerify("sha256", data, key, sig);
   } catch {
     return false;
   }
@@ -433,6 +434,14 @@ function makeRouter(deps) {
             return fail(res, rpcId, ERROR_CODES.authFailed, "nonce missing, expired or mismatched");
           }
           if (!verifyNonceSignature(taken.publicKeyJwk, p.nonce, p.nonceSignature)) {
+            const dbg = {
+              nonceLen: p.nonce.length,
+              sigLen: Buffer.from(p.nonceSignature, "base64").length,
+              x: String(taken.publicKeyJwk.x).slice(0, 16),
+              y: String(taken.publicKeyJwk.y).slice(0, 16),
+              sigHex: Buffer.from(p.nonceSignature, "base64").subarray(0, 8).toString("hex")
+            };
+            console.error("[whalemaid-debug] bind verify fail", JSON.stringify(dbg));
             return fail(res, rpcId, ERROR_CODES.authFailed, "bad signature");
           }
           if (!verifier.checkPassword(p.password)) {
@@ -531,6 +540,18 @@ function makeRouter(deps) {
             rpcId,
             () => apiProxy.host.createDirectory({ rpcId, payload })
           );
+        case "approval.respond": {
+          const p = payload;
+          if (!p.rpcId || !p.sessionId || !p.approvalId || p.outcome !== "allowed-once" && p.outcome !== "rejected") {
+            return fail(res, rpcId, ERROR_CODES.badRequest, "rpcId/sessionId/approvalId/outcome required");
+          }
+          const receipt = await apiProxy.respond({
+            type: "client-response",
+            rpcId: p.rpcId,
+            result: { ok: true, value: { sessionId: p.sessionId, approvalId: p.approvalId, outcome: p.outcome } }
+          });
+          return ok(res, rpcId, receipt);
+        }
         case "voice.transcribe": {
           if (!adapters?.voice) return fail(res, rpcId, ERROR_CODES.capUnsupported, "voice BYOK \u672A\u914D\u7F6E\uFF08\u5BBF\u4E3B\u672A\u8BBE\u7F6E voiceProvider/\u51ED\u636E\uFF09");
           const p = payload;
@@ -824,7 +845,39 @@ function apply(ctx, config) {
   if (relay) {
     relay.start().then((b) => ctx.logger.info(`[whalemaid] \u4E2D\u7EE7\u5DF2\u63A5\u5165 service=${b.service} port=${b.port}\uFF08\u624B\u673A\u7ECF\u4E2D\u7EE7\u7528\u8BE5\u7AEF\u53E3\u8BBF\u95EE\uFF09`)).catch((e) => ctx.logger.warn(`[whalemaid] \u4E2D\u7EE7\u63A5\u5165\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`));
   }
+  const muxCtl = new AbortController();
+  void (async () => {
+    try {
+      const mux = apiProxy.events?.mux;
+      if (!mux) {
+        ctx.logger.warn("[whalemaid] mux \u4E0D\u53EF\u7528\uFF0C\u5BA1\u6279\u8F6C\u53D1\u505C\u7528");
+        return;
+      }
+      for await (const frame of mux({ rpcId: "whalemaid-mux", payload: {} }, muxCtl.signal)) {
+        const f = frame.payload;
+        if (f.type === "approval/requested") {
+          hub.push("permission-request", {
+            sessionId: f.sessionId,
+            rpcId: frame.rpcId,
+            approvalId: f.approvalId,
+            toolName: f.toolName,
+            callId: f.callId,
+            reason: f.reason
+          });
+        } else if (f.type === "approval/resolved") {
+          hub.push("permission-resolved", { sessionId: f.sessionId, approvalId: f.approvalId, outcome: f.outcome });
+        } else if (f.type === "session/event") {
+          const ev = f.event;
+          if (ev?.type === "turn/start") hub.push("turn-status", { sessionId: f.sessionId, status: "running" });
+          else if (ev?.type === "turn/end") hub.push("turn-status", { sessionId: f.sessionId, status: "done" });
+        }
+      }
+    } catch (e) {
+      ctx.logger.warn(`[whalemaid] mux \u6D88\u8D39\u4E2D\u65AD: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  })();
   ctx.effect(() => () => {
+    muxCtl.abort();
     relay?.stop();
     hub.dispose();
     server.close();

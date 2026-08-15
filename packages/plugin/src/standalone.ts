@@ -30,6 +30,7 @@ const mock: HostApiProxy = {
     listDirectory: async () => okValue({ path: '/', entries: [], crumbs: ['/'], truncated: false }),
     createDirectory: async () => okValue({ path: '/x' }),
   },
+  respond: async () => ({ accepted: true }),
 }
 
 const port = Number(process.env.WHALEMAID_STANDALONE_PORT ?? 3180)

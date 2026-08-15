@@ -13,6 +13,7 @@ export type ServerEventType =
   | 'message'
   | 'tool-call'
   | 'permission-request'
+  | 'permission-resolved'
   | 'device-revoked'
 
 export interface TurnStatusPayload {
@@ -34,7 +35,18 @@ export interface ToolCallPayload {
 
 export interface PermissionRequestPayload {
   sessionId: string
-  prompt: string
+  /** 宿主审批的稳定 rpcId（回应时必须回显） */
+  rpcId: string
+  approvalId: string
+  toolName: string
+  callId?: string
+  reason?: string
+}
+
+export interface PermissionResolvedPayload {
+  sessionId: string
+  approvalId: string
+  outcome: string
 }
 
 export interface DeviceRevokedPayload {

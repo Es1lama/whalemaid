@@ -50,6 +50,7 @@ object Envelope {
 
 private fun Map<String, Any?>.toJson(): JsonObject = buildJsonObject {
   for ((k, v) in this@toJson) put(k, when (v) {
+    is kotlinx.serialization.json.JsonElement -> v // 已序列化的 JsonObject/JsonPrimitive 直通（避免 toString 带引号）
     null -> JsonPrimitive(null as String?)
     is String -> JsonPrimitive(v)
     is Int -> JsonPrimitive(v)
@@ -67,7 +68,7 @@ fun extractText(value: JsonObject, depth: Int = 0): List<String> {
   if (depth > 3) return emptyList()
   val out = mutableListOf<String>()
   for ((k, v) in value) {
-    if (k in setOf("content", "text", "delta", "title", "name", "prompt", "message")) {
+    if (k in setOf("content", "text", "delta", "title", "name", "prompt", "message", "payload")) {
       when (v) {
         is JsonPrimitive -> if (v.contentOrNull != null) out.add(v.content)
         is JsonObject -> out.addAll(extractText(v, depth + 1))

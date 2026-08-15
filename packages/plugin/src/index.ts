@@ -114,7 +114,44 @@ export function apply(ctx: Context, config?: Config): void {
       .catch((e) => ctx.logger.warn(`[whalemaid] 中继接入失败: ${e instanceof Error ? e.message : String(e)}`))
   }
 
+  // 审批桥（REQ-008 原生审批流）：消费 dsh mux 流，转发 approval/requested|resolved 到 SSE
+  const muxCtl = new AbortController()
+  void (async () => {
+    try {
+      const mux = (apiProxy as unknown as {
+        events?: { mux?: (r: { rpcId: string; payload: Record<string, never> }, signal: AbortSignal) => AsyncIterable<{ rpcId: string; payload: Record<string, unknown> }> }
+      }).events?.mux
+      if (!mux) {
+        ctx.logger.warn('[whalemaid] mux 不可用，审批转发停用')
+        return
+      }
+      for await (const frame of mux({ rpcId: 'whalemaid-mux', payload: {} }, muxCtl.signal)) {
+        const f = frame.payload
+        if (f.type === 'approval/requested') {
+          hub.push('permission-request', {
+            sessionId: f.sessionId,
+            rpcId: frame.rpcId,
+            approvalId: f.approvalId,
+            toolName: f.toolName,
+            callId: f.callId,
+            reason: f.reason,
+          })
+        } else if (f.type === 'approval/resolved') {
+          hub.push('permission-resolved', { sessionId: f.sessionId, approvalId: f.approvalId, outcome: f.outcome })
+        } else if (f.type === 'session/event') {
+          // 运行态（PROTO-004）：turn/start → running；turn/end → done（真实事件优于猜测）
+          const ev = f.event as { type?: string } | undefined
+          if (ev?.type === 'turn/start') hub.push('turn-status', { sessionId: f.sessionId, status: 'running' })
+          else if (ev?.type === 'turn/end') hub.push('turn-status', { sessionId: f.sessionId, status: 'done' })
+        }
+      }
+    } catch (e) {
+      ctx.logger.warn(`[whalemaid] mux 消费中断: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  })()
+
   ctx.effect(() => () => {
+    muxCtl.abort()
     relay?.stop()
     hub.dispose()
     server.close()

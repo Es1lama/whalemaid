@@ -52,7 +52,28 @@ object DeviceKey {
     val sig = Signature.getInstance("SHA256withECDSA")
     sig.initSign(pair.private)
     sig.update(nonce.toByteArray(Charsets.UTF_8))
-    return Base64.getEncoder().encodeToString(sig.sign())
+    // JCA 默认 DER；协议要求 IEEE P1363 裸 r||s（PROTO-003，与 Web/iOS 端一致）
+    return Base64.getEncoder().encodeToString(derToP1363(sig.sign()))
+  }
+
+  /** DER(0x30...) → P1363 r||s（P-256 各 32 字节） */
+  private fun derToP1363(der: ByteArray, fieldSize: Int = 32): ByteArray {
+    val lenR = der[3].toInt() and 0xff
+    val r = der.copyOfRange(4, 4 + lenR)
+    val j = 4 + lenR
+    val lenS = der[j + 1].toInt() and 0xff
+    val s = der.copyOfRange(j + 2, j + 2 + lenS)
+    fun pad(v: ByteArray): ByteArray {
+      // 剥掉符号前导零，再左补齐到 fieldSize
+      var start = 0
+      while (start < v.size - 1 && v[start] == 0.toByte()) start++
+      val trimmed = v.copyOfRange(start, v.size)
+      if (trimmed.size == fieldSize) return trimmed
+      val out = ByteArray(fieldSize)
+      trimmed.copyInto(out, fieldSize - trimmed.size)
+      return out
+    }
+    return pad(r) + pad(s)
   }
 
   private fun base64Url(bytes: ByteArray): String =

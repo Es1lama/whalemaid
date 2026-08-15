@@ -33,6 +33,8 @@ export class EventHub {
       connection: 'keep-alive',
     })
     res.write('retry: 3000\n\n')
+    // 连接即回放历史帧（含 mux 重放的待审批请求——恢复基线，PROTO-004）
+    for (const frame of this.history) res.write(`data: ${JSON.stringify(frame)}\n\n`)
     this.subscribers.add(res)
     res.on('close', () => this.subscribers.delete(res))
   }

@@ -288,18 +288,44 @@ fun ChatScreen(client: ProtocolClient, sessionId: String, onBack: () -> Unit) {
       } catch (e: Exception) { error = e.message ?: "历史加载失败" }
     }
   }
+  // 审批卡片（REQ-008：原生审批流）
+  var pendingApproval by remember { mutableStateOf<JsonObject?>(null) }
+
   androidx.compose.runtime.LaunchedEffect(sessionId) {
     load()
     client.events({ frame ->
-      val status = frame["payload"]?.jsonObject?.get("status")?.jsonPrimitive?.contentOrNull
-      if (status == "running") running = true
-      if (status == "done") { running = false; load() }
+      val type = frame["type"]?.jsonPrimitive?.contentOrNull
+      val payload = frame["payload"]?.jsonObject
+      when (type) {
+        "turn-status" -> {
+          val status = payload?.get("status")?.jsonPrimitive?.contentOrNull
+          if (status == "running") running = true
+          if (status == "done") { running = false; load() }
+        }
+        "permission-request" -> pendingApproval = payload
+        "permission-resolved" -> pendingApproval = null
+      }
     }, { })
     thread { runCatching { perm = client.permissionGet(sessionId)["permissions"]?.jsonObject } }
   }
 
   val fullText = messages.joinToString("\n\n") { it.second }
   val toc = remember(fullText) { tocFromText(fullText) }
+
+  fun answerApproval(outcome: String) {
+    val p = pendingApproval ?: return
+    thread {
+      runCatching {
+        client.approvalRespond(
+          p["rpcId"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+          p["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+          p["approvalId"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+          outcome,
+        )
+      }
+      pendingApproval = null
+    }
+  }
 
   // 模型/思考强度与权限预设（REQ-007/008：绝对原生的 dsh 体验）
   var sheet by remember { mutableStateOf<String?>(null) }
@@ -346,6 +372,18 @@ fun ChatScreen(client: ProtocolClient, sessionId: String, onBack: () -> Unit) {
       OutlinedButton(onBack) { Text("←") }
       Text("会话", style = MaterialTheme.typography.titleMedium)
       OutlinedButton({ showToc = !showToc }, enabled = toc.isNotEmpty()) { Text("目录") }
+    }
+    pendingApproval?.let { p ->
+      Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text("⚠ 需要审批：${p["toolName"]?.jsonPrimitive?.contentOrNull ?: "tool"}", style = MaterialTheme.typography.titleSmall)
+          p["reason"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button({ answerApproval("allowed-once") }, Modifier.weight(1f)) { Text("允许") }
+            OutlinedButton({ answerApproval("rejected") }, Modifier.weight(1f)) { Text("拒绝") }
+          }
+        }
+      }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       OutlinedButton(::openModels) { Text("模型/思考强度") }
