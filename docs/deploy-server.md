@@ -11,8 +11,9 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 ```
 
 - 2333：rathole 隧道控制端口（受控端 sidecar 连这里，**noise 加密**）；
-- 5202+：每设备一个转发端口（主控端经此端口进入隧道，见下"主控端接入"）；
-- 9080：控制面管理 API（**仅 HTTPS**，自签证书 + 指纹固定）。生产环境建议防火墙限制 9080 与 5202+ 来源。
+- 5202+：每设备一个转发端口（**只绑 127.0.0.1**，不对外，SEC-004b）；
+- 9080：控制面管理 API（**仅 HTTPS**，自签证书 + 指纹固定）；
+- 9443：主控端隧道入口（**仅 TLS**，一次性 grant 校验后转发到受控端隧道；SEC-004b）。公网部署只需暴露 9080/9443。
 
 ## 被控端（家里电脑）接入
 
@@ -31,8 +32,8 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 
 ## 主控端接入（编号+密码，无 IP）
 
-1. 主控端 `POST /_whalemaid/connect`（设备编号+密码，限速 5/min、错 5 次锁 5 分钟）→ 返回 `{ deviceId, service, port }`（不含 token，不轮换；SEC-003）；
-2. 主控端连 `<服务器>:<port>` 进入 rathole 隧道 → 受控端网关侧挑战应答绑定（密码只走 noise 密文，SEC-004）；
+1. 主控端 `POST /_whalemaid/connect`（设备编号+密码，限速 5/min、错 5 次锁 5 分钟）→ 返回 `{ deviceId, service, grant, grantTtlSec, tunnelPort }`（**不含设备服务端口**，不轮换 token；SEC-003/004b）；
+2. 主控端 TLS 连接 `<服务器>:<tunnelPort>`，首行发 `GRANT <grant> <deviceId>`（2 分钟内单次消费）→ 中继校验后转发进 rathole noise 隧道 → 受控端网关侧挑战应答绑定（密码只走密文，SEC-004）；
 3. 设备在线状态：`GET /_whalemaid/devices/:id/status`（公开、限速，不回 IP/端口/token）。
 
 ## 运维
@@ -45,4 +46,4 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 
 - 控制面 API 是**开源**部分（AGPL-3.0）；账号/计费/Level 分层属私有仓 `whalemaid-console` 的控制管理系统，另文说明；
 - rathole 许可 Apache-2.0，随镜像分发合法；
-- 主控端→中继服务端口段当前为 rathole 原生明文 TCP（rathole 设计：加密发生在中继↔受控端之间）——该段的一体化 TLS/授权正在按 SEC-004 收尾（短时授权 + 中继侧 TLS 入口），完成前**不建议把 5202+ 端口直接暴露公网**。
+- 全链无明文段（SEC-004b 已闭合）：主控端→中继 = TLS（同 API 证书体系）+ 一次性 grant；中继→受控端 = rathole noise（静态密钥 + pin 公钥）；受控端内部 = 网关侧挑战应答。实测脚本 scripts/rathole-noise-e2e.mjs。

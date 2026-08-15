@@ -1,6 +1,7 @@
 // SPEC: docs/security-audit.md#SEC-001/002/003 控制面 API：安装码注册、每设备凭据、/connect 密码匹配+限速（隧道 token 注册后固定，授权在受控端网关侧）
 // SPEC: docs/threat-model.md#TM-005 心跳/在线状态/吊销
 use crate::config::RelayConfig;
+use crate::grants::GrantStore;
 use crate::limiter::{Attempt, Limiter};
 use crate::rathole::{render_server_config, RatholeSidecar};
 use crate::registry::Registry;
@@ -13,6 +14,7 @@ use axum::{
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 pub const HEARTBEAT_TIMEOUT_SECS: u64 = 45;
 
@@ -29,6 +31,8 @@ pub struct AppState {
     /// rathole noise 静态密钥对（SEC-001/003）：private 只进配置文件；public 经 /tunnel 下发受控端 pin
     pub noise_private_key: String,
     pub noise_public_key: String,
+    /// 主控端一次性连接 grant（SEC-004b）
+    pub grants: Mutex<GrantStore>,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -91,7 +95,8 @@ async fn register(State(s): State<Arc<AppState>>, headers: HeaderMap, body: Stri
 
 /// SEC-002：主控端连接——设备编号+密码；限速/锁定。
 /// SEC-003（Codex 审计修复）：只做密码验证与寻址，**不轮换隧道 token**（token 是受控端侧固定凭据）；
-/// 主控端拿到端口后经 rathole 隧道直连受控端网关，在网关侧完成挑战应答绑定（密码只走 noise 加密隧道）。
+/// SEC-004b：成功后签发**短时一次性 grant**（2min、单次消费），主控端凭 grant 走 TLS 隧道入口进入 rathole 隧道；
+/// 响应**不含设备服务端口**（路由秘密不外泄），只给隧道入口端口（与 API 同主机）。
 async fn connect(State(s): State<Arc<AppState>>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -116,7 +121,11 @@ async fn connect(State(s): State<Arc<AppState>>, headers: HeaderMap, body: Strin
         (dev.service.clone(), dev.port)
     };
     s.limiter.lock().await.record_success(&key);
-    Ok((StatusCode::OK, Json(json!({ "deviceId": device_id, "service": service, "port": port }))))
+    // SEC-004b：一次性 grant（TTL 2min）；隧道入口端口从配置解析
+    let grant = Uuid::new_v4().simple().to_string();
+    s.grants.lock().await.issue(grant.clone(), device_id.clone(), port);
+    let tunnel_port = s.config.tunnel_listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(9443);
+    Ok((StatusCode::OK, Json(json!({ "deviceId": device_id, "service": service, "grant": grant, "grantTtlSec": 120, "tunnelPort": tunnel_port }))))
 }
 
 /// 被控端隧道签发：凭据鉴权，返回当前隧道 token（不轮换——token 一经注册固定，SEC-003）

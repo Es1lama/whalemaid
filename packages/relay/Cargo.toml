@@ -23,3 +23,7 @@ snowstorm = { version = "0.4", default-features = false }
 base64 = "0.22"
 # 由持久化 private 推导 public（snow 的 generate_keypair 总生成新密钥，不能用于恢复）
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+# SEC-004b 隧道入口 TLS（与 axum-server 同 rustls 0.23 体系）
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"

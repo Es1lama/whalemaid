@@ -1,9 +1,11 @@
 // SPEC: docs/PREFLIGHT.md 中继控制面入口
 mod api;
 mod config;
+mod grants;
 mod limiter;
 mod rathole;
 mod registry;
+mod tunnel;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -60,6 +62,7 @@ async fn main() -> Result<()> {
         limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
         noise_private_key,
         noise_public_key,
+        grants: Mutex::new(grants::GrantStore::new(Duration::from_secs(120))),
     });
 
     // sidecar 启动：rathole 服务端（首次配置=当前活跃设备）。
@@ -99,6 +102,16 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("[whalemaid-relay] 控制面监听 https://{}（TLS）", config.listen);
 
+    // SEC-004b：主控端隧道入口（同一证书体系构建第二个 TLS acceptor；授权靠一次性 grant）
+    let tunnel_acceptor = build_tls_acceptor(&cert_path, &key_path)?;
+    let tunnel_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tunnel::serve(tunnel_state, tunnel_acceptor).await {
+            eprintln!("[whalemaid-relay] 隧道入口退出: {e}");
+            std::process::exit(1);
+        }
+    });
+
     // 优雅退出：Ctrl-C 时先停 sidecar（rathole），再退
     let state_for_signal = state.clone();
     tokio::spawn(async move {
@@ -116,4 +129,18 @@ fn sha256_hex(der: &[u8]) -> String {
     let mut h = sha2::Sha256::new();
     h.update(der);
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 用 API 同一张自签证书构建 TLS acceptor（隧道入口与 API 同指纹体系，客户端 pin 一个指纹即可）
+fn build_tls_acceptor(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<tokio_rustls::TlsAcceptor> {
+    use std::io::BufReader;
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut BufReader::new(std::fs::File::open(cert_path)?)).collect::<std::result::Result<_, _>>()?;
+    let key = rustls_pemfile::private_key(&mut BufReader::new(std::fs::File::open(key_path)?))?
+        .ok_or_else(|| anyhow::anyhow!("无可用私钥"))?;
+    let cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(tokio_rustls::TlsAcceptor::from(Arc::new(cfg)))
 }

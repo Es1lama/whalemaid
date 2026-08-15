@@ -13,6 +13,8 @@ pub struct RelayConfig {
     pub rathole_server_cfg: PathBuf,
     /// rathole 服务端控制端口（设备服务转发端口由注册时分配）
     pub rathole_bind: String,
+    /// 主控端隧道入口（TLS + 一次性 grant 校验后转发到 rathole 服务端口；SEC-004b）
+    pub tunnel_listen: String,
 }
 
 impl Default for RelayConfig {
@@ -23,6 +25,7 @@ impl Default for RelayConfig {
             rathole_bin: PathBuf::from("rathole"),
             rathole_server_cfg: PathBuf::from("./data/rathole-server.toml"),
             rathole_bind: "0.0.0.0:2333".into(),
+            tunnel_listen: "127.0.0.1:9443".into(),
         }
     }
 }

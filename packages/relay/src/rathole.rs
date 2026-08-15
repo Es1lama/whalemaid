@@ -42,7 +42,8 @@ pub fn render_server_config(registry: &Registry, bind: &str, noise_private_b64: 
     out.push_str(&format!("local_private_key = \"{noise_private_b64}\"\n\n"));
     for d in registry.active() {
         out.push_str(&format!("[server.services.{}]\n", d.service));
-        out.push_str(&format!("bind_addr = \"0.0.0.0:{}\"\n", d.port));
+        // SEC-004b：服务端口只绑回环——主控端经 TLS 隧道入口（grant 校验后）转发进来，永不直接暴露公网
+        out.push_str(&format!("bind_addr = \"127.0.0.1:{}\"\n", d.port));
         // rathole 服务端配置持有明文 token（服务端即验证方；文件由 persist 以 0600 落盘）
         out.push_str(&format!("token = \"{}\"\n\n", d.rathole_token));
     }

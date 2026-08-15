@@ -930,6 +930,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
@@ -1454,6 +1455,8 @@ dependencies = [
  "base64",
  "getrandom 0.2.17",
  "rcgen",
+ "rustls",
+ "rustls-pemfile",
  "scrypt",
  "serde",
  "serde_json",
@@ -1461,6 +1464,7 @@ dependencies = [
  "sha2",
  "snowstorm",
  "tokio",
+ "tokio-rustls",
  "uuid",
  "x25519-dalek",
 ]
