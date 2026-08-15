@@ -18,3 +18,8 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 scrypt = "0.11"
 getrandom = "0.2"
+# rathole 同款 noise（snowstorm 0.4，与 rathole 依赖一致）：静态 X25519 密钥对生成
+snowstorm = { version = "0.4", default-features = false }
+base64 = "0.22"
+# 由持久化 private 推导 public（snow 的 generate_keypair 总生成新密钥，不能用于恢复）
+x25519-dalek = { version = "2", features = ["static_secrets"] }

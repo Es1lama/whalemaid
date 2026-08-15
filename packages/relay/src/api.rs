@@ -26,6 +26,9 @@ pub struct AppState {
     pub install_code: String,
     /// /connect 限速与锁定（SEC-002）
     pub limiter: Mutex<Limiter>,
+    /// rathole noise 静态密钥对（SEC-001/003）：private 只进配置文件；public 经 /tunnel 下发受控端 pin
+    pub noise_private_key: String,
+    pub noise_public_key: String,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -34,6 +37,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_whalemaid/devices", post(register).get(list))
         .route("/_whalemaid/devices/:id", delete(revoke))
         .route("/_whalemaid/devices/:id/heartbeat", post(heartbeat))
+        .route("/_whalemaid/devices/:id/status", get(device_status))
         .route("/_whalemaid/devices/:id/tunnel", post(tunnel))
         .route("/_whalemaid/connect", post(connect))
         .with_state(state)
@@ -53,7 +57,7 @@ fn unauthorized() -> (StatusCode, Json<Value>) {
 
 async fn reload_config(s: &Arc<AppState>) -> Result<(), String> {
     let reg = s.registry.lock().await;
-    let cfg = render_server_config(&reg, &s.config.rathole_bind);
+    let cfg = render_server_config(&reg, &s.config.rathole_bind, &s.noise_private_key);
     s.sidecar
         .lock()
         .await
@@ -127,7 +131,8 @@ async fn tunnel(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extrac
         let dev = reg.active().find(|d| d.id == id).ok_or((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))?;
         (dev.service.clone(), dev.port, dev.rathole_token.clone())
     };
-    Ok((StatusCode::OK, Json(json!({ "id": id, "service": service, "port": port, "tunnelToken": token }))))
+    // SEC-001/003：受控端 rathole 客户端必须 pin 服务端 noise 公钥（NK 模式，防中间人）
+    Ok((StatusCode::OK, Json(json!({ "id": id, "service": service, "port": port, "tunnelToken": token, "serverPublicKey": s.noise_public_key }))))
 }
 
 async fn list(State(s): State<Arc<AppState>>, headers: HeaderMap) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
@@ -145,8 +150,7 @@ async fn list(State(s): State<Arc<AppState>>, headers: HeaderMap) -> Result<(Sta
     Ok((StatusCode::OK, Json(json!({ "devices": devices }))))
 }
 
-async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
+async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
     let authorized = { s.registry.lock().await.authenticate_credential(cred).map(|d| d.id == id).unwrap_or(false) };
     if !authorized {
         return Err(unauthorized())
@@ -156,6 +160,24 @@ async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::ext
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))
     }
     Ok((StatusCode::OK, Json(json!({ "ok": true }))))
+}
+
+/// audit#4（D-026）：主控端按设备编号查询状态——Phase A 无账号，设备列表 = 主控端本机记忆 + 本端点逐个查询；
+/// 不回 IP/端口/token（DESIGN §6.3 不泄露约束）；按 IP 限速防编号枚举；未知与离线区分（registered 位）
+async fn device_status(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let ip = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+    if s.limiter.lock().await.check(&format!("status:{ip}")) != Attempt::Allowed {
+        return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
+    }
+    let (registered, online, last_seen_at) = {
+        let reg = s.registry.lock().await;
+        let found_id = reg.active().find(|d| d.id == id).map(|d| d.id.clone());
+        match found_id {
+            Some(did) => (true, reg.online(&did, HEARTBEAT_TIMEOUT_SECS), reg.last_seen_at(&did)),
+            None => (false, false, None),
+        }
+    };
+    Ok((StatusCode::OK, Json(json!({ "id": id, "registered": registered, "online": online, "last_seen_at": last_seen_at }))))
 }
 
 async fn revoke(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {

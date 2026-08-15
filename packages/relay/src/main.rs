@@ -22,6 +22,9 @@ async fn main() -> Result<()> {
         config.data_dir = PathBuf::from(&v);
         config.rathole_server_cfg = config.data_dir.join("rathole-server.toml");
     }
+    if let Ok(v) = std::env::var("WHALEMAID_RELAY_RATHOLE_BIN") {
+        config.rathole_bin = PathBuf::from(&v);
+    }
     let admin_token = std::env::var("ADMIN_TOKEN").unwrap_or_default();
     let install_code = std::env::var("ADMIN_INSTALL_CODE").unwrap_or_default();
 
@@ -32,6 +35,22 @@ async fn main() -> Result<()> {
         5202, // 设备转发端口起始（rathole 服务端口段）
     )?;
 
+    // SEC-001/003：rathole noise 静态密钥对（NK 25519）——持久化 0600；private 只进 rathole 配置，
+    // public 经 /tunnel（TLS）下发受控端 pin。rathole 默认 transport 是 TCP 明文，必须显式 noise。
+    let noise_key_path = config.data_dir.join("noise-key");
+    let (noise_private_key, noise_public_key) = if noise_key_path.exists() {
+        let b64 = std::fs::read_to_string(&noise_key_path)?.trim().to_string();
+        let (priv_key, pub_key) = rathole::generate_noise_keypair_from_private(&b64)?;
+        (priv_key, pub_key)
+    } else {
+        let (priv_key, pub_key) = rathole::generate_noise_keypair()?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&noise_key_path, &priv_key)?;
+        std::fs::set_permissions(&noise_key_path, std::fs::Permissions::from_mode(0o600))?;
+        println!("[whalemaid-relay] 首次生成 rathole noise 静态密钥对（{noise_key_path:?}，0600）");
+        (priv_key, pub_key)
+    };
+
     let state = Arc::new(api::AppState {
         registry: Mutex::new(registry),
         config: config.clone(),
@@ -39,13 +58,15 @@ async fn main() -> Result<()> {
         admin_token,
         install_code,
         limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
+        noise_private_key,
+        noise_public_key,
     });
 
     // sidecar 启动：rathole 服务端（首次配置=当前活跃设备）。
     // 启动失败不致命：控制面仍可服务（管理员装好 rathole 后重启容器即可）
     {
         let reg = state.registry.lock().await;
-        let cfg = rathole::render_server_config(&reg, &config.rathole_bind);
+        let cfg = rathole::render_server_config(&reg, &config.rathole_bind, &state.noise_private_key);
         std::fs::write(&config.rathole_server_cfg, &cfg)?;
         if let Err(e) = state
             .sidecar

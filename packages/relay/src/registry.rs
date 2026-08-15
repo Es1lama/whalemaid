@@ -179,6 +179,11 @@ impl Registry {
             .map(|t| now.saturating_sub(*t) <= timeout_secs)
             .unwrap_or(false)
     }
+
+    /// 最近心跳时间（unix 秒）；设备状态查询用（audit#4：主控端按编号查在线状态）
+    pub fn last_seen_at(&self, id: &str) -> Option<u64> {
+        self.last_seen.get(id).copied()
+    }
 }
 
 #[cfg(test)]
@@ -249,8 +254,11 @@ mod tests {
         let mut reg = temp_registry();
         let (record, _, _) = reg.register("whale-test-gggg", &hash_password("pw").unwrap()).unwrap();
         assert!(!reg.online(&record.id, 45));
+        assert_eq!(reg.last_seen_at(&record.id), None);
         assert!(reg.touch(&record.id));
         assert!(reg.online(&record.id, 45));
+        assert!(reg.last_seen_at(&record.id).is_some());
+        assert_eq!(reg.last_seen_at("ghost"), None);
         assert!(!reg.touch("unknown-id"));
     }
 }

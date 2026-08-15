@@ -814,10 +814,19 @@ var RelayClient = class {
     });
     if (res.status >= 300) throw new Error(`\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
     const binding = await res.json();
+    if (!binding.serverPublicKey) {
+      throw new Error("\u670D\u52A1\u7AEF\u672A\u8FD4\u56DE rathole noise \u516C\u94A5\uFF08serverPublicKey\uFF09\uFF0C\u62D2\u7EDD\u5EFA\u7ACB\u96A7\u9053\uFF08SEC-001/003\uFF09");
+    }
     const host = new URL(base).hostname;
     const cfgText = [
       "[client]",
       `remote_addr = "${host}:${this.cfg.relayPort}"`,
+      "",
+      "[client.transport]",
+      'type = "noise"',
+      "[client.transport.noise]",
+      // NK 模式：固定服务端公钥（与中继持久化静态密钥对配套，防中间人；rathole 默认 transport 是 TCP 明文，必须显式 noise）
+      `remote_public_key = "${binding.serverPublicKey}"`,
       "",
       `[client.services.${binding.service}]`,
       `token = "${binding.tunnelToken}"`,

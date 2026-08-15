@@ -32,6 +32,8 @@ export interface RelayBinding {
   port: number
   tunnelToken: string
   credential: string
+  /** SEC-001/003：服务端 rathole noise 静态公钥（base64）——客户端必须 pin（NK 模式防中间人） */
+  serverPublicKey: string
 }
 
 /** SEC-002：PHC scrypt 哈希（与服务端 scrypt crate 参数一致 ln=14,r=8,p=1） */
@@ -138,10 +140,20 @@ export class RelayClient {
     })
     if (res.status >= 300) throw new Error(`隧道签发失败: ${res.status} ${await res.text()}`)
     const binding = (await res.json()) as unknown as RelayBinding
+    // SEC-003（同类全查：与 relayFingerprint 同等级别）——服务端未返回 noise 公钥 = 拒绝建隧道（无 pin = 防不了中间人）
+    if (!binding.serverPublicKey) {
+      throw new Error('服务端未返回 rathole noise 公钥（serverPublicKey），拒绝建立隧道（SEC-001/003）')
+    }
     const host = new URL(base).hostname
     const cfgText = [
       '[client]',
       `remote_addr = "${host}:${this.cfg.relayPort}"`,
+      '',
+      '[client.transport]',
+      'type = "noise"',
+      '[client.transport.noise]',
+      // NK 模式：固定服务端公钥（与中继持久化静态密钥对配套，防中间人；rathole 默认 transport 是 TCP 明文，必须显式 noise）
+      `remote_public_key = "${binding.serverPublicKey}"`,
       '',
       `[client.services.${binding.service}]`,
       `token = "${binding.tunnelToken}"`,
