@@ -14,6 +14,7 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 - 5202+：每设备一个转发端口（**只绑 127.0.0.1**，不对外，SEC-004b）；
 - 9080：控制面管理 API（**仅 HTTPS**，自签证书 + 指纹固定）；
 - 9443：主控端隧道入口（**仅 TLS**，一次性 grant 校验后转发到受控端隧道；SEC-004b）。公网部署只需暴露 9080/9443。
+- 环境开关：`WHALEMAID_RELAY_TRUSTED_PROXY=1`（仅在可信反代后启用 X-Forwarded-For 限速键；默认 socket peer IP）；`WHALEMAID_RELAY_MAX_DEVICES=<n>`（设备配额，enrollment secret 泄露时限制注册规模）；`WHALEMAID_RELAY_TUNNEL_LISTEN`（隧道入口监听，公网部署设 `0.0.0.0:9443`）。
 
 ## 被控端（家里电脑）接入
 

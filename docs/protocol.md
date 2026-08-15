@@ -26,7 +26,7 @@
 1. **设备编号**：宿主插件生成 `WHALE-XXXX-XXXX`（base32 排除易混字符），受控端设置页展示。
 2. **长期密码（REQ-002）**：宿主生成随机 12 字符；注册时只上报 **scrypt PHC 哈希**（ln=14,r=8,p=1，Node/Rust 跨语言互验）；重生成 = 清凭据重新注册（旧哈希随注册更新即失效）。
 3. **每设备凭据（SEC-001）**：安装码注册签发随机 256-bit 凭据（受控端落盘 0600），用于隧道签发/心跳/自吊销。
-4. **主控端授权（SEC-002/004b）**：`/_whalemaid/connect`（编号+密码，限速 5/min、错 5 次锁 5 分钟）→ 单连接一次性 grant → 隧道入口消费。密码只走 TLS/WSS/noise 密文，服务端只比对哈希。
+4. **主控端授权（SEC-002/004b）**：`/_whalemaid/connect`（编号+密码，**失败尝试限速 5/min、错 5 次锁 5 分钟；成功验证不占窗口预算**——逐请求签 grant 的合法高频）→ 单连接一次性 grant → 隧道入口消费。密码只走 TLS/WSS/noise 密文，服务端只比对哈希。
 5. 吊销即时生效：设备条目移除 → 隧道热重载断开 → 凭据心跳 401 → 主控端 grant 拒发。
 
 ## PROTO-004 会话通道（E2E 主通道）
@@ -67,5 +67,5 @@
 | `GET /_whalemaid/devices/:id/status` | 公开在线查询（不回路由秘密，限速） | 无 |
 | `DELETE /_whalemaid/devices/:id` | 吊销（自吊销或管理令牌） | 凭据/admin |
 | `POST /_whalemaid/connect` | 主控端连接：密码验证 + grant（无 IP） | 无（限速+锁定） |
-| `GET /_whalemaid/tunnel-ws` | WSS 隧道入口 | grant |
+| `GET /_whalemaid/tunnel-ws` | WSS 隧道入口（宽松泛洪上限 600/min/IP；grant 单次消费+TTL 防滥用，逐请求建连是合法高频） | grant |
 | `GET /_whalemaid/devices` | 管理列表 | admin |

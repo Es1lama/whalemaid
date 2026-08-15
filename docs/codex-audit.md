@@ -124,3 +124,30 @@
 - `pnpm --dir apps/controller/web test`、`pnpm --dir apps/controller/electron test`：均通过 Node 语法检查。
 - `bash .github/scripts/check-banned-terms.sh`：通过；该结果只证明当前脚本覆盖范围内无命中，不覆盖本节指出的语义污染与排除目录。
 - 未启动任何服务，未访问或修改 `127.0.0.1:3080`。
+
+## 第四轮：用户原话对齐审计（2026-08-15 深夜，主代理执行；Codex 流式中断，本轮为人工+静态证据核对）
+
+> 方法：逐字引用 docs/OWNER-DIRECTIVES.md §原文留存，证据取仓库实际代码/文档/可运行验证（行号以本轮回写时为准），不把设计文档当交付。
+
+### 逐条对照（原文摘录 | 实际结果证据 | 判定）
+
+| 指令 | 用户原话（摘录） | 实际结果（证据） | 判定 |
+|---|---|---|---|
+| D-020 | "移动端……ui和原生网页端尽量一致，我是说，代码复用。而且整个逻辑应该是远程控制逻辑……手机无法运行dsh" | 主控端不运行 DSH：apps/controller/web/server.mjs:102-103 把请求改写为宿主权威经隧道转发，官方 UI 由受控端宿主提供（实测 __DSH_BOOT__ 页面返回）；Android 壳 = Capacitor（apps/controller/android/package.json:5）承载同一设备管理页 | ◐ 部分：PC/Web 已复用官方前端（运行时 UI 即宿主官方 UI）；Android 壳已建成 APK（构建+安装+启动验证），但真机 UI 流程未跑通（AOSP 模拟器 WebView provider 环境损坏） |
+| D-021 | "你安卓端代码，和原生dpsk体验，相差太大了。你用korin完全重构……原来的dsh和你的构建是完全不一样的" | 自研 Kotlin UI 已删（git 历史备份）；现行 Android 壳零自研 UI（www/index.html 只有设备管理首屏，界面即官方前端）；CI 守卫 ban Kotlin/SwiftUI（.github/scripts/check-banned-terms.sh:8） | ✅ 对齐 |
+| D-022 | "不是复刻，而是前端移植后改动……手机端控制，后端是将这个前端的接口，由直接运行，变为链接电脑的受控dsh" | 官方前端零改动运行：主控端 GET / 经隧道拿宿主官方 index（实测含 __DSH_BOOT__），POST /api/session.list 官方信封 200（实测）；插件隧道 local_addr 直指宿主原生 web 端口（packages/plugin/src/relay.ts local_addr、index.ts webServer） | ✅ 对齐（"接口由直接运行变链接受控 dsh" 已按原话实现并实测） |
+| D-023 | "前端移植，可以直接打包成app吗？我不希望还是打开一个浏览器……不止移植……与服务器等内容进行转接，还有提供电脑的文件夹访问……" | 打包 app：Electron 壳（apps/controller/electron/main.cjs:47-49 BrowserWindow）+ Android APK（构建成功 4.3MB）；服务器转接：中继+grant+TLS/WSS 隧道（实测）；文件夹访问：宿主官方 browse seam 原生承载（协议 v3 PROTO-007） | ◐ 部分：打包/转接/文件夹访问已成立；**照片上传、语音录音原生桥未实现**（protocol.md PROTO-005/006 标注为 V1 里程碑）；Android 真机流程待 WebView 环境 |
+| D-024 | "受控端：dsh+插件……主控端：无需dsh，是控制app……服务端：流量转接……大部分代码都不变，只是对于原生的一些接口要改部分的api/sdk" | 三端实体成立：受控端=宿主+插件（插件零监听零自研协议）；主控端 Web/Electron/Android 均无需 DSH；服务端=中继（流量转接）。"大部分代码不变" = 官方 UI/API 零改动（实测）；原生接口改动 = 隧道代理（server.mjs / WhaleMaidTunnelPlugin.kt） | ✅ 对齐（Android 原生代理为 Kotlin 编译通过、APK 建成） |
+| D-025 | "PC就electron 和 web都提供，让用户选择" | Web 版（apps/controller/web）+ Electron 版（apps/controller/electron，smoke 通过）双双存在 | ✅ 对齐 |
+| D-026 | "不需要填写ip地址……受控端和服务端握手注册……移动端和服务端握手，告诉服务端你可以选择的进程。那账号密码在服务端一匹配，成功了就给你连上" | 无 IP：连接 = 设备编号+密码（实测 200→grant→隧道→官方界面）；注册握手：插件启动自动注册+心跳（实测）；在线查询：GET /_whalemaid/devices/:id/status（不回路由秘密）；服务端匹配：/connect scrypt 验证+限速锁定（实测错密401/锁定423） | ◐ 部分：原话"移动端和服务端握手拿设备列表（可选择进程）"= 账号范围的设备列表——Phase A 无账号未实现（本地记忆+按编号查询）；其余全部实测成立 |
+| D-027 | "不要自己造轮子，除非考虑协议影响商业化。还有搜索调查学习先于代码构建……犯过两次错：1 前端不用dsh，整个安卓自创；2 连桌面远控的最基本逻辑都没通" | 不造轮子：隧道=rathole sidecar（noise 显式化+静态密钥，读其源码实现）、UI/API=官方、加密=TLS/noise；先学习后构建：docs/security-audit.md 每环先列成熟实现（frp/rathole/headscale 源码位置）再改码；两次错误均已纠正（自研 UI 删除、远控逻辑全链实测闭环） | ✅ 对齐 |
+| D-028 | "我指出你的错误，不代表你只有这些错误，一般只说最具有代表性的……你连思考都没有思考过其他问题" | 同类全查机制：CI 守卫（关键词+语义模式，零豁免）；Codex 三轮审计共 15+7+7 条问题全部逐条修复并回写；UX-001..022 全量清单持续回写状态 | ◐ 部分：机制已建立并三轮执行；但第四轮审计时仍发现"安卓真机未验证"类缺口（本轮如实记录），全查仍有遗漏面（移动端验证环境） |
+| D-029 | "你不学习人家代码，你的这种涉及到网络安全的东西，万一，有坏人信道攻击呢？无数电脑变成肉鸡？还有我说了要和codex配合" | 信道全链实测（scripts/rathole-noise-e2e.mjs）：noise 静态密钥+pin（错误公钥握手失败实测）、控制面 TLS+指纹（错误指纹拒）、/connect scrypt+限速锁定（伪造 XFF 仍 423 实测）、grant 单次消费（重用/伪造实测拒）、服务端口只绑回环；Codex 三轮审计+修复 | ✅ 对齐（肉鸡风险五环 P0 全部实装并有攻击路径实测证据） |
+| D-030 | "错误污染源（如错误文档内容，错误代码）及时git 备份，然后及时清除……把全部指令与更正记录一份下来，之后很长时间对着这份文件，全部改正了。设定成goal。记录的结尾要直接保留我的这好几条指令的原文" | 指令全集+原文留存：docs/OWNER-DIRECTIVES.md（§原文留存逐字在列）；污染清仓：/api/v1 全链删、contract 整删、自研 UI 删、PEM/凭据/镜像出库（git 历史备份）；goal 设定：goal-4cc3896a（12 轮进行至第 9 轮） | ✅ 对齐 |
+
+### 本轮审计新增缺口（如实）
+
+1. **Android 真机 UI 流程未验证**：APK 构建/安装/启动已验证，但 AOSP 模拟器 WebView provider 环境损坏（`Current WebView package is null`），BlueStacks adb 文件同步通道间歇性断连——"手机端实际点连接→看到官方界面"这一步没有实测证据。
+2. **D-023 原生桥（相机/麦克风/文件）与 D-026 账号设备列表**仍未实现（已如实标注在协议 v3 与 UX 清单）。
+3. 语音/视觉（D-023 延伸）未实现，协议中标注为 V1 里程碑（未冒充已完成）。
+

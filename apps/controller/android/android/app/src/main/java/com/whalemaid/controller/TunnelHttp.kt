@@ -75,10 +75,49 @@ object TunnelHttp {
         return sb.toString()
     }
 
-    /** 官方事件通道（/api/events.mux|host）的 WS upgrade 请求行——使用页面实际请求的 URI，不硬编码 */
-    fun buildEventsUpgradeRequest(uri: String, secWebSocketKey: String): String =
-        "GET $uri HTTP/1.1\r\nHost: $HOST_AUTHORITY\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: $secWebSocketKey\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    /** 官方事件通道（/api/events.mux|host）的 WS upgrade 请求行——使用页面实际请求的 URI 与 Origin，不硬编码 */
+    fun buildEventsUpgradeRequest(uri: String, secWebSocketKey: String, origin: String? = null): String {
+        val originLine = if (origin.isNullOrEmpty()) "" else "Origin: $origin\r\n"
+        return "GET $uri HTTP/1.1\r\nHost: $HOST_AUTHORITY\r\n$originLine" +
+            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: $secWebSocketKey\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    }
 
     /** 中继控制面端口 = server 串实际端口（TOFU 指纹必须从该端口捕获）；缺省 9080（部署默认） */
     fun controlPortOf(server: String): Int = server.substringAfter(":", "9080").substringBefore("/").toIntOrNull() ?: 9080
+
+    /**
+     * 上游 WS 字节流帧解析（server→client 无掩码）。事件桥用它把宿主的 WS 帧
+     * 按原 opcode/fin/payload 重发（文本帧不能被降级成二进制帧——官方客户端只认 text）。
+     * 数据不足返回 null（继续攒）；服务端帧带掩码 = 协议违例，抛异常。
+     */
+    object WsFrames {
+        data class Frame(val fin: Boolean, val opcode: Int, val payload: ByteArray, val consumed: Int)
+
+        fun tryParse(buf: ByteArray, offset: Int): Frame? {
+            if (buf.size - offset < 2) return null
+            val b0 = buf[offset].toInt() and 0xFF
+            val b1 = buf[offset + 1].toInt() and 0xFF
+            val fin = (b0 and 0x80) != 0
+            val opcode = b0 and 0x0F
+            val masked = (b1 and 0x80) != 0
+            if (masked) throw IllegalArgumentException("服务端 WS 帧不应带掩码（协议违例）")
+            var len = b1 and 0x7F
+            var head = offset + 2
+            if (len == 126) {
+                if (buf.size - head < 2) return null
+                len = ((buf[head].toInt() and 0xFF) shl 8) or (buf[head + 1].toInt() and 0xFF)
+                head += 2
+            } else if (len == 127) {
+                if (buf.size - head < 8) return null
+                var l = 0L
+                for (i in 0 until 8) l = (l shl 8) or (buf[head + i].toLong() and 0xFF)
+                if (l > Int.MAX_VALUE) throw IllegalArgumentException("WS 帧过长")
+                len = l.toInt()
+                head += 8
+            }
+            if (buf.size - head < len) return null
+            val payload = buf.copyOfRange(head, head + len)
+            return Frame(fin, opcode, payload, head + len - offset)
+        }
+    }
 }

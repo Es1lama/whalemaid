@@ -32,8 +32,12 @@ pub struct AppState {
     pub install_code: String,
     /// /connect 限速与锁定（SEC-002）
     pub limiter: Mutex<Limiter>,
+    /// WSS 隧道入口泛洪上限（宽松；grant 单次消费+TLL 已防滥用，逐请求建连是合法高频）
+    pub ws_limiter: Mutex<Limiter>,
     /// 仅在显式配置可信反代时解析 X-Forwarded-For（审计三轮#2：默认用 socket peer IP）
     pub trusted_proxy: bool,
+    /// 设备配额（审计三轮#4 缓解：enrollment secret 泄露时限制可注册设备数；0 = 不限）
+    pub max_devices: u64,
     /// rathole noise 静态密钥对（SEC-001/003）：private 只进配置文件；public 经 /tunnel 下发受控端 pin
     pub noise_private_key: String,
     pub noise_public_key: String,
@@ -93,9 +97,15 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
     if s.install_code.is_empty() || headers.get("x-install-code").and_then(|v| v.to_str().ok()) != Some(s.install_code.as_str()) {
         return Err(unauthorized())
     }
-    // 审计三轮#4：enrollment secret 为长期共享秘密——按 IP 限速防批量注册
-    if s.limiter.lock().await.check(&format!("register:{}", client_ip(&s, &headers, Some(peer)))) != Attempt::Allowed {
+    // 审计三轮#4：enrollment secret 为长期共享秘密——按 IP 限速 + 设备配额双闸防批量注册
+    if s.limiter.lock().await.consume(&format!("register:{}", client_ip(&s, &headers, Some(peer)))) != Attempt::Allowed {
         return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
+    }
+    if s.max_devices > 0 {
+        let count = { let reg = s.registry.lock().await; reg.active().count() as u64 };
+        if count >= s.max_devices {
+            return Err((StatusCode::CONFLICT, Json(json!({ "error": "device-quota-reached" }))))
+        }
     }
     let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -218,7 +228,7 @@ async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::ext
 /// 不回 IP/端口/token（DESIGN §6.3 不泄露约束）；按 IP 限速防编号枚举；未知与离线区分（registered 位）
 async fn device_status(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let ip = client_ip(&s, &headers, Some(peer));
-    if s.limiter.lock().await.check(&format!("status:{ip}")) != Attempt::Allowed {
+    if s.limiter.lock().await.consume(&format!("status:{ip}")) != Attempt::Allowed {
         return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
     }
     let (registered, online, last_seen_at) = {
@@ -254,7 +264,7 @@ async fn revoke(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extrac
 /// 之后帧 = 原始字节（HTTP 请求等），双工转发到受控端 rathole 服务端口。限速 + 单次消费 + 设备绑定同裸 TLS 入口。
 async fn tunnel_ws(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
     let ip = client_ip(&s, &headers, Some(peer));
-    if s.limiter.lock().await.check(&format!("tunnelws:{ip}")) != Attempt::Allowed {
+    if s.ws_limiter.lock().await.consume(&format!("tunnelws:{ip}")) != Attempt::Allowed {
         return (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))).into_response()
     }
     ws.on_upgrade(move |socket| ws_tunnel_session(s, socket))
@@ -265,18 +275,22 @@ async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
     // 首帧 = GRANT 行（10s 超时）
     let grant_line = match tokio::time::timeout(std::time::Duration::from_secs(10), socket.recv()).await {
         Ok(Some(Ok(Message::Text(t)))) => t,
-        _ => return,
+        other => { eprintln!("[ws-tunnel] 首帧异常: {other:?}"); return }
     };
     let parts: Vec<&str> = grant_line.split_whitespace().collect();
     if parts.len() != 3 || parts[0] != "GRANT" {
+        eprintln!("[ws-tunnel] 首帧非 GRANT 行: {grant_line:?}");
         return;
     }
     let Some(port) = state.grants.lock().await.consume(parts[1], parts[2]) else {
+        eprintln!("[ws-tunnel] grant 校验失败 device={}", parts[2]);
         return;
     };
     let Ok(mut backend) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
+        eprintln!("[ws-tunnel] 后端连接失败 port={port}");
         return;
     };
+    eprintln!("[ws-tunnel] 会话建立 port={port}");
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // 单任务 select 双工泵（避免半连接别名借用）：ws 帧 ↔ tcp 字节
@@ -288,16 +302,16 @@ async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
                     Some(Ok(Message::Binary(d))) => backend.write_all(&d).await,
                     Some(Ok(Message::Text(d))) => backend.write_all(d.as_bytes()).await,
                     Some(Ok(Message::Ping(_))) => { let _ = socket.send(Message::Pong(vec![])).await; continue }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    _ => break,
+                    Some(Ok(Message::Close(_))) | None => { eprintln!("[ws-tunnel] 客户端关闭帧/断开 port={port}"); break }
+                    _ => { eprintln!("[ws-tunnel] 未知消息 port={port}"); break }
                 };
-                if r.is_err() { break }
+                if r.is_err() { eprintln!("[ws-tunnel] 写后端失败 port={port}"); break }
             }
             n = backend.read(&mut buf) => {
                 match n {
-                    Ok(0) => break,
-                    Ok(n) => { if socket.send(Message::Binary(buf[..n].to_vec())).await.is_err() { break } }
-                    Err(_) => break,
+                    Ok(0) => { eprintln!("[ws-tunnel] 后端关闭 port={port}"); break }
+                    Ok(n) => { if socket.send(Message::Binary(buf[..n].to_vec())).await.is_err() { eprintln!("[ws-tunnel] 写客户端失败 port={port}"); break } }
+                    Err(e) => { eprintln!("[ws-tunnel] 后端读失败 port={port}: {e}"); break }
                 }
             }
         }

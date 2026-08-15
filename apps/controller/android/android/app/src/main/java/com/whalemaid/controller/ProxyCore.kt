@@ -48,6 +48,39 @@ class ProxyCore(
 ) {
     companion object {
         const val MAX_BODY = 64L * 1024 * 1024
+
+        /**
+         * 移动适配层 polyfill：官方前端用 AbortSignal.any/timeout（Chrome 116+），
+         * 老 WebView（如 BlueStacks 内置 101）缺失时同步抛异常导致连接循环自杀。
+         * 只在缺失时注入，不改变官方前端任何调用点（ADR-039 移动适配）。
+         */
+        val POLYFILL_SCRIPT = """
+            <script id="whalemaid-polyfill">
+            (function () {
+              if (typeof AbortSignal === 'undefined') return;
+              if (!AbortSignal.any) {
+                AbortSignal.any = function (signals) {
+                  var list = signals || [];
+                  var c = new AbortController();
+                  if (list.some(function (s) { return s && s.aborted; })) { c.abort(); return c.signal; }
+                  list.forEach(function (s) {
+                    if (!s) return;
+                    s.addEventListener('abort', function () { c.abort(s.reason); }, { once: true });
+                  });
+                  return c.signal;
+                };
+              }
+              if (!AbortSignal.timeout) {
+                AbortSignal.timeout = function (ms) {
+                  var c = new AbortController();
+                  var t = setTimeout(function () { c.abort(new DOMException('TimeoutError', 'TimeoutError')); }, ms);
+                  if (t && typeof t.unref === 'function') t.unref();
+                  return c.signal;
+                };
+              }
+            })();
+            </script>
+        """.trimIndent()
     }
 
     data class Session(var server: String = "", var deviceId: String = "", var password: String = "")
@@ -119,8 +152,17 @@ class ProxyCore(
         }
     }
 
-    fun tunnelExchange(httpHead: String, bodyBytes: ByteArray?): ByteArray {
-        val (code, body) = relayRequest(session.server, "/_whalemaid/connect", "POST",
+    /** 官方 HTML 头部注入 WebView 兼容 polyfill（幂等） */
+    private fun injectPolyfill(html: ByteArray): ByteArray {
+        val text = html.toString(Charsets.UTF_8)
+        if (text.contains("whalemaid-polyfill")) return html
+        val idx = text.indexOf("<head")
+        if (idx < 0) return html
+        val insertAt = text.indexOf('>', idx) + 1
+        return (text.substring(0, insertAt) + POLYFILL_SCRIPT + text.substring(insertAt)).toByteArray(Charsets.UTF_8)
+    }
+
+    fun tunnelExchange(httpHead: String, bodyBytes: ByteArray?): ByteArray {        val (code, body) = relayRequest(session.server, "/_whalemaid/connect", "POST",
             """{"deviceId":"${session.deviceId}","password":"${session.password}"}""")
         if (code != 200) throw IOException("connect $code: $body")
         val grant = JSONObject(body).getString("grant")
@@ -153,10 +195,19 @@ class ProxyCore(
     fun start(onReady: (Int) -> Unit) {
         val server = object : NanoWSD(0) {
             override fun openWebSocket(handshake: IHTTPSession): NanoWSD.WebSocket? {
-                return if (handshake.uri.startsWith("/api/events")) WebSocketBridge(this@ProxyCore, handshake) else null
+                if (handshake.uri.startsWith("/api/events")) {
+                    println("[WhaleMaidTunnel] 事件WS握手 uri=${handshake.uri} hdrs=${handshake.headers.keys.joinToString(",")}")
+                    return WebSocketBridge(this@ProxyCore, handshake)
+                }
+                return null
             }
 
             override fun serve(session: IHTTPSession): NanoHTTPD.Response {
+                // WS 升级请求必须交还 NanoWSD 内置握手（否则被我们的路由当普通请求进隧道 → 502）
+                if (session.uri.startsWith("/api/events")) {
+                    println("[WhaleMaidTunnel] events请求 method=${session.method} uri=${session.uri} hdrs=${session.headers}")
+                }
+                if (isWebsocketRequested(session)) return super.serve(session)
                 return try {
                     val uri = session.uri
                     val method = session.method?.name ?: "GET"
@@ -188,9 +239,14 @@ class ProxyCore(
                             val bodyBytes = readBody(session)
                             val head = TunnelHttp.buildTunnelRequest(method, uri, session.headers, bodyBytes)
                             val raw = tunnelExchange(head, bodyBytes)
-                            val (status, respHeaders, payload) = TunnelHttp.parseResponse(raw)
-                            val resp = NanoHTTPD.newFixedLengthResponse(NanoStatus.of(status), "application/octet-stream", ByteArrayInputStream(payload), payload.size.toLong())
-                            respHeaders.forEach { (k, v) -> if (k !in setOf("connection", "transfer-encoding", "content-length", "date")) resp.addHeader(k, v) }
+                            val (status, respHeaders, payload0) = TunnelHttp.parseResponse(raw)
+                            // 官方 HTML 注入 WebView 兼容 polyfill（老 WebView 缺 AbortSignal.any/timeout）
+                            val payload = if (status == 200 && (respHeaders["content-type"] ?: "").contains("text/html")) {
+                                injectPolyfill(payload0)
+                            } else payload0
+                            // 上游 Content-Type 原样透传（浏览器对 JS 模块执行严格 MIME 检查，硬编码 octet-stream 会白屏）
+                            val resp = NanoHTTPD.newFixedLengthResponse(NanoStatus.of(status), respHeaders["content-type"] ?: "application/octet-stream", ByteArrayInputStream(payload), payload.size.toLong())
+                            respHeaders.forEach { (k, v) -> if (k !in setOf("connection", "transfer-encoding", "content-length", "date", "content-type")) resp.addHeader(k, v) }
                             resp
                         }
                     }
@@ -226,35 +282,87 @@ class ProxyCore(
     inner class WebSocketBridge(private val proxy: ProxyCore, handshake: IHTTPSession) : NanoWSD.WebSocket(handshake) {
         private var up: OkWebSocket? = null
         private val pending = ConcurrentLinkedQueue<ByteArray>()
+        // 上联字节流：先吞掉宿主 WS 的 HTTP 101 响应头，随后按原 opcode/fin 逐帧重发（文本帧不可降级为二进制）
+        private val upstreamBuf = ByteArrayOutputStream()
+        private var upstreamHeadSkipped = false
+
+        private fun opCodeFor(v: Int): NanoWSD.WebSocketFrame.OpCode? = when (v) {
+            0 -> NanoWSD.WebSocketFrame.OpCode.Continuation
+            1 -> NanoWSD.WebSocketFrame.OpCode.Text
+            2 -> NanoWSD.WebSocketFrame.OpCode.Binary
+            8 -> NanoWSD.WebSocketFrame.OpCode.Close
+            9 -> NanoWSD.WebSocketFrame.OpCode.Ping
+            10 -> NanoWSD.WebSocketFrame.OpCode.Pong
+            else -> null
+        }
+
+        private fun feedUpstream(bytes: ByteArray) {
+            upstreamBuf.write(bytes)
+            if (!upstreamHeadSkipped) {
+                val raw = upstreamBuf.toByteArray()
+                val sep = TunnelHttp.indexOfCrlfCrlf(raw)
+                if (sep < 0) return // 101 头未到齐，继续攒
+                upstreamHeadSkipped = true
+                upstreamBuf.reset()
+                upstreamBuf.write(raw, sep + 4, raw.size - sep - 4)
+            }
+            val buf = upstreamBuf.toByteArray()
+            var off = 0
+            while (off < buf.size) {
+                val frame = try {
+                    TunnelHttp.WsFrames.tryParse(buf, off)
+                } catch (e: IllegalArgumentException) {
+                    println("[WhaleMaidTunnel] 上游帧协议违例: ${e.message}")
+                    close(CloseCode.InternalServerError, e.message, false)
+                    return
+                } ?: break
+                off += frame.consumed
+                val op = opCodeFor(frame.opcode) ?: continue // 保留位/未知 opcode 丢弃该帧
+                try {
+                    sendFrame(NanoWSD.WebSocketFrame(op, frame.fin, frame.payload))
+                } catch (e: IOException) {
+                    println("[WhaleMaidTunnel] 帧转发失败: ${e.message}")
+                    close(CloseCode.InternalServerError, e.message, false)
+                    return
+                }
+            }
+            upstreamBuf.reset()
+            if (off < buf.size) upstreamBuf.write(buf, off, buf.size - off)
+        }
 
         override fun onOpen() {
+            val t0 = System.currentTimeMillis()
             Thread {
                 try {
                     val (code, body) = relayRequest(session.server, "/_whalemaid/connect", "POST",
                         """{"deviceId":"${session.deviceId}","password":"${session.password}"}""")
-                    if (code != 200) { close(CloseCode.InternalServerError, "grant failed", false); return@Thread }
+                    if (code != 200) { println("[WhaleMaidTunnel] 事件桥connect失败 $code"); close(CloseCode.InternalServerError, "grant failed", false); return@Thread }
                     val grant = JSONObject(body).getString("grant")
                     up = clientFor(session.server).newWebSocket(
                         Request.Builder().url("wss://${session.server}/_whalemaid/tunnel-ws").build(),
                         object : WebSocketListener() {
                             override fun onOpen(webSocket: OkWebSocket, response: OkResponse) {
+                                println("[WhaleMaidTunnel] 事件桥上联open +${System.currentTimeMillis() - t0}ms")
                                 webSocket.send("GRANT $grant ${session.deviceId}")
                                 val hs = getHandshakeRequest()
                                 val key = hs.headers["sec-websocket-key"] ?: ""
-                                // 用页面实际请求的事件通道（/api/events.mux 或 /api/events.host）而非硬编码
-                                webSocket.send(TunnelHttp.buildEventsUpgradeRequest(hs.uri, key))
+                                val origin = hs.headers["origin"] ?: "http://${TunnelHttp.HOST_AUTHORITY}"
+                                // 用页面实际请求的事件通道（/api/events.mux 或 /api/events.host）而非硬编码；Origin 透传（宿主 WS 信任栅栏校验）
+                                webSocket.send(TunnelHttp.buildEventsUpgradeRequest(hs.uri, key, origin))
                                 while (true) { val f = pending.poll() ?: break; webSocket.send(okio.ByteString.of(*f)) }
                             }
-                            override fun onMessage(webSocket: OkWebSocket, bytes: okio.ByteString) { send(bytes.toByteArray()) }
-                            override fun onMessage(webSocket: OkWebSocket, text: String) { send(text.toByteArray()) }
+                            override fun onMessage(webSocket: OkWebSocket, bytes: okio.ByteString) { feedUpstream(bytes.toByteArray()) }
+                            override fun onMessage(webSocket: OkWebSocket, text: String) { feedUpstream(text.toByteArray()) }
                             override fun onFailure(webSocket: OkWebSocket, t: Throwable, response: OkResponse?) {
+                                println("[WhaleMaidTunnel] 事件桥上联失败 +${System.currentTimeMillis() - t0}ms: ${t.message} resp=${response?.code}")
                                 close(CloseCode.InternalServerError, t.message ?: "bridge failed", false)
                             }
                             override fun onClosed(webSocket: OkWebSocket, code: Int, reason: String) {
+                                println("[WhaleMaidTunnel] 事件桥上联关闭: $code $reason")
                                 close(CloseCode.NormalClosure, "upstream closed", false)
                             }
                         })
-                } catch (e: Exception) { close(CloseCode.InternalServerError, e.message ?: "bridge failed", false) }
+                } catch (e: Exception) { println("[WhaleMaidTunnel] 事件桥异常: ${e.message}"); close(CloseCode.InternalServerError, e.message ?: "bridge failed", false) }
             }.start()
         }
 

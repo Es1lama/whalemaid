@@ -24,3 +24,4 @@ packages/android/local.properties
 
 # 主控端运行时状态（中继证书指纹 TOFU 等，绝不入库）
 apps/controller/web/.controller-data/
+.android-home/

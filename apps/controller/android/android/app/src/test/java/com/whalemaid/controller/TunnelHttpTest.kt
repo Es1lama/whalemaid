@@ -119,11 +119,18 @@ class TunnelHttpTest {
 
     @Test
     fun buildEventsUpgradeRequestUsesActualUri() {
-        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.host?x=1", "dGhlIHNhbXBsZSBub25jZQ==")
+        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.host?x=1", "dGhlIHNhbXBsZSBub25jZQ==", "http://127.0.0.1:3181")
         assertTrue(req.startsWith("GET /api/events.host?x=1 HTTP/1.1\r\n"))
         assertTrue(req.contains("Host: ${TunnelHttp.HOST_AUTHORITY}\r\n"))
+        assertTrue(req.contains("Origin: http://127.0.0.1:3181\r\n"))
         assertTrue(req.contains("Upgrade: websocket\r\n"))
         assertTrue(req.contains("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"))
+    }
+
+    @Test
+    fun buildEventsUpgradeRequestOmitsEmptyOrigin() {
+        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.mux", "", null)
+        assertFalse(req.contains("Origin:"))
     }
 
     @Test
@@ -142,6 +149,14 @@ class TunnelHttpTest {
         }
     }
 
+    @Test
+    fun nanoStatusDescriptionCarriesCode() {
+        // NanoHTTPD 状态行 = "HTTP/1.1 " + getDescription()；描述必须自带状态码
+        for (code in listOf(423, 429, 502, 504, 599)) {
+            assertTrue(NanoStatus.of(code).description.startsWith("$code "))
+        }
+    }
+
     // ---- TOFU 捕获端口必须等于实际连接端口（默认 9080） ----
 
     @Test
@@ -150,5 +165,48 @@ class TunnelHttpTest {
         assertEquals(9080, TunnelHttp.controlPortOf("relay.example.com"))
         assertEquals(9443, TunnelHttp.controlPortOf("relay.example.com:9443"))
         assertEquals(9080, TunnelHttp.controlPortOf("relay.example.com:notaport"))
+    }
+
+    // ---- 上游 WS 帧解析（server→client 无掩码；按原 opcode/fin 重发用） ----
+
+    @Test
+    fun wsFramesSingleTextFrame() {
+        val f = TunnelHttp.WsFrames.tryParse(byteArrayOf(0x81.toByte(), 0x05, 'h'.code.toByte(), 'e'.code.toByte(), 'l'.code.toByte(), 'l'.code.toByte(), 'o'.code.toByte()), 0)!!
+        assertEquals(true, f.fin)
+        assertEquals(1, f.opcode)
+        assertArrayEquals("hello".toByteArray(), f.payload)
+        assertEquals(7, f.consumed)
+    }
+
+    @Test
+    fun wsFramesBinaryAndPing() {
+        val bin = TunnelHttp.WsFrames.tryParse(byteArrayOf(0x82.toByte(), 0x01, 0x2A), 0)!!
+        assertEquals(2, bin.opcode)
+        val ping = TunnelHttp.WsFrames.tryParse(byteArrayOf(0x89.toByte(), 0x00), 0)!!
+        assertEquals(9, ping.opcode)
+        assertEquals(2, ping.consumed)
+    }
+
+    @Test
+    fun wsFramesExtendedLength16() {
+        val buf = ByteArray(260)
+        buf[0] = 0x81.toByte(); buf[1] = 0x7E; buf[2] = 0x01; buf[3] = 0x00
+        val f = TunnelHttp.WsFrames.tryParse(buf, 0)!!
+        assertEquals(256, f.payload.size)
+        assertEquals(260, f.consumed)
+    }
+
+    @Test
+    fun wsFramesFragmentedContinuation() {
+        // fin=0 op=1 "he" | fin=1 op=0 "llo"
+        val f1 = TunnelHttp.WsFrames.tryParse(byteArrayOf(0x01, 0x02, 'h'.code.toByte(), 'e'.code.toByte()), 0)!!
+        assertEquals(false, f1.fin); assertEquals(1, f1.opcode)
+        val f2 = TunnelHttp.WsFrames.tryParse(byteArrayOf(0x80.toByte(), 0x03, 'l'.code.toByte(), 'l'.code.toByte(), 'o'.code.toByte()), 0)!!
+        assertEquals(true, f2.fin); assertEquals(0, f2.opcode)
+    }
+
+    @Test
+    fun wsFramesIncompleteReturnsNull() {
+        assertEquals(null, TunnelHttp.WsFrames.tryParse(byteArrayOf(0x81.toByte(), 0x05, 'h'.code.toByte()), 0))
     }
 }

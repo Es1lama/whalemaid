@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
     let install_code = std::env::var("ADMIN_INSTALL_CODE").unwrap_or_default();
     // 审计三轮#2：默认用 socket peer IP 做限速键；显式配置可信反代后才解析 X-Forwarded-For
     let trusted_proxy = std::env::var("WHALEMAID_RELAY_TRUSTED_PROXY").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let max_devices = std::env::var("WHALEMAID_RELAY_MAX_DEVICES").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
 
     std::fs::create_dir_all(&config.data_dir)?;
 
@@ -66,10 +67,12 @@ async fn main() -> Result<()> {
         admin_token,
         install_code,
         limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
+        ws_limiter: Mutex::new(limiter::Limiter::new(600, Duration::from_secs(60), 600, Duration::from_secs(60))),
         noise_private_key,
         noise_public_key,
         grants: Mutex::new(grants::GrantStore::new(Duration::from_secs(120))),
         trusted_proxy,
+        max_devices,
     });
 
     // sidecar 启动：rathole 服务端（首次配置=当前活跃设备）。
