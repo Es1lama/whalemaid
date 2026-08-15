@@ -37,7 +37,7 @@
 
 | ID | 行为 | 状态 |
 |---|---|---|
-| UX-015 | 官方 DSH 前端移植 + 移动适配（原生壳打包） | ◐ 独立构建 spike 已通（docs/research/spike-official-frontend.md，官方 commit 47f9438 冻结）；vendor 产物与三壳工程待落地 |
+| UX-015 | 官方 DSH 前端移植 + 移动适配（原生壳打包） | ◐ 官方 dist 已 vendor（47f9438 冻结+LICENSE/NOTICES）；Web 版主控端实测闭环（设备管理+官方 UI/API/WS 经隧道反代）；Electron/Capacitor 壳待包 |
 | UX-016 | 审批/权限预设交互与桌面一致 | ◐ 官方前端原生自带（移植即得）；App 壳落地后按官方 UI 验收 |
 | UX-017 | 电脑文件夹访问（browse seam 移动 UI） | ◐ 协议通，UI 待移植 |
 | UX-018 | 照片（相机/相册）与语音（麦克风）原生桥 | ❌ |
