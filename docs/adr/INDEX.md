@@ -38,8 +38,10 @@
 | ADR-031 | S0/S1 结论 | 插件形态/宿主 API/browse seam/凭据/web 路由全部静态确认可行；**直连改走插件自建 listener（选项 B）**——rc.6 CLI 拒绝 `--host 0.0.0.0`，自建 server + `toFetchHandler(ctx.apiProxy)` 不依赖官方绑定 | research/spike-S0-S1 |
 | ADR-036 | 双仓分离 | 开源（AGPL）与闭源控制台分仓；`packages/contract` 为边界（统一 API 契约，双仓共用）；社区代码进闭源仓须 CLA（ADR-027） | DESIGN §0 |
 | ADR-037 | 原生端策略 | 手机端原生优先（Web 仅兜底）；本机无 Xcode → Android(Kotlin) 本地全验证先行，iOS(SwiftUI) 源码并行 + CI macOS runner 构建验证；两端同对 docs/protocol.md 实现 | DESIGN §3 |
-| ADR-038 | 控制端对称 | **远程控制是核心逻辑**：任意 DSH 主机可互为控制端/被控端（packages/control 工具插件驱动远程 whalemaid 网关）；手机=不能运行 DSH 的薄客户端（同一协议，PROTO 全量） | DESIGN §0 |
-| ADR-039 | UI 复用 | 三端（PWA/Android/iOS）UI 结构、文案、状态机一致；协议客户端/状态逻辑单一实现（Android/iOS 中期走 KMP 共享模块，PWA 为参考实现）；先以共享核心 + 同构视图树约束 | DESIGN §3 |
+| ADR-038 | ~~控制端对称~~ **已废止** | 原"agent 工具控制另一主机"模型错误；由 ADR-040 取代（主控端是控制 App，非 agent 工具） | 废止于 ADR-040 |
+| ADR-039 | 前端策略 v2 | **移植 > 复刻**：官方 DSH web 前端（MIT）移植 + 移动/桌面适配 + 原生壳打包（Capacitor/Electron/Tauri），同源调用原生 /api 经网关打到受控端 | DESIGN §3 |
+| ADR-040 | 三端实体模型 | 受控端=能跑 DSH 的端+插件；服务端=流量转接（中继+账号分层）；主控端=控制 App（无需 DSH：PC/安卓/iOS/鸿蒙，同一移植前端打包）；控制是人对机，非 agent 对 agent | DESIGN §0 |
+| ADR-041 | 自定协议废止 | /api/v1 废止：主控端直用 DSH 原生 /api（经认证网关）；仅保留设备配对/管理最小端点并入网关；packages/control 废止 | DESIGN §5 |
 | ADR-032 | S2 结论 | rathole sidecar 定案：控制面写配置+托管子进程+热重载增删；每设备一 service+token；吊销=移除条目热重载；noise 加密+心跳 | research/spike-S2-S5 |
 | ADR-033 | S3 结论 | 设备密钥 = PWA WebCrypto ECDSA P-256 不可导出，IndexedDB 持久化；挑战-应答握手；重装即重新配对 | research/spike-S2-S5 |
 | ADR-034 | S4 结论 | 热词库走官方定制热词 HTTP API（vocabulary 增删改查 + 实时会话带 vocabulary_id）；BYOK 同机制 | research/spike-S2-S5 |
