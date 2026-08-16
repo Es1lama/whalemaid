@@ -7,8 +7,17 @@
 
 ```sh
 cd packages/relay
-ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次性安装码' docker compose up -d --build
+ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的首启种子' docker compose up -d --build
 ```
+
+- `ADMIN_INSTALL_CODE`：仅作**首启种子**（默认单次可消费安装令牌，SEC-001 审计三轮#4 修订）。日常签发新令牌（明文仅返回一次）：
+  ```sh
+  curl -sk -X POST https://<服务器>:9080/_whalemaid/admin/install-tokens \
+    -H "authorization: Bearer <ADMIN_TOKEN>" -H 'content-type: application/json' \
+    -d '{"maxUses":1,"ttlSec":86400}'
+  # → {"token":"<一次性明文>",...}；清单: GET /_whalemaid/admin/install-tokens
+  ```
+  每个受控端设备配一枚令牌（注册成功即消耗；令牌耗尽/过期/未知 → 401）。
 
 - 2333：rathole 隧道控制端口（受控端 sidecar 连这里，**noise 加密**）；
 - 5202+：每设备一个转发端口（**只绑 127.0.0.1**，不对外，SEC-004b）；
@@ -33,7 +42,7 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的一次
 
 ## 主控端接入（编号+密码，无 IP）
 
-1. 主控端 `POST /_whalemaid/connect`（设备编号+密码，限速 5/min、错 5 次锁 5 分钟）→ 返回 `{ deviceId, service, grant, grantTtlSec, tunnelPort }`（**不含设备服务端口**，不轮换 token；SEC-003/004b）；
+1. 主控端首次 `POST /_whalemaid/connect` 使用设备编号+密码（失败限速 5/min、错 5 次锁 5 分钟）→ 返回 `{ deviceId, service, sessionToken, sessionTtlSec, grant, grantTtlSec, tunnelPort }`；`sessionToken` 为 15 分钟、绑定客户端 IP+设备的快速认证令牌，主控端只在进程内保存，后续逐请求以 `{ deviceId, sessionToken }` 换新 grant（响应**不含设备服务端口**，不轮换 rathole token；SEC-002/003/004b）；
 2. 主控端 TLS 连接 `<服务器>:<tunnelPort>`，首行发 `GRANT <grant> <deviceId>`（2 分钟内单次消费）→ 中继校验后转发进 rathole noise 隧道 → 受控端宿主原生 web（官方 /api+WS+UI，密码只走密文，SEC-004）；浏览器/WebView 用 WSS 入口 `/_whalemaid/tunnel-ws`；
 3. 设备在线状态：`GET /_whalemaid/devices/:id/status`（公开、限速，不回 IP/端口/token）。
 

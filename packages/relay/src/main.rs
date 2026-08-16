@@ -3,6 +3,7 @@ mod api;
 mod config;
 mod controller_sessions;
 mod grants;
+mod install_tokens;
 mod limiter;
 mod rathole;
 mod registry;
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
         config.tunnel_listen = v;
     }
     let admin_token = std::env::var("ADMIN_TOKEN").unwrap_or_default();
+    // SEC-001（审计三轮#4 修订）：ADMIN_INSTALL_CODE 仅作首启种子（默认单次可消费）；日常用管理端点签发
     let install_code = std::env::var("ADMIN_INSTALL_CODE").unwrap_or_default();
     // 审计三轮#2：默认用 socket peer IP 做限速键；显式配置可信反代后才解析 X-Forwarded-For
     let trusted_proxy = std::env::var("WHALEMAID_RELAY_TRUSTED_PROXY").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
@@ -44,6 +46,9 @@ async fn main() -> Result<()> {
         config.data_dir.join("devices.json"),
         5202, // 设备转发端口起始（rathole 服务端口段）
     )?;
+
+    let mut install_tokens = install_tokens::InstallTokenStore::load(config.data_dir.join("install-tokens.json"))?;
+    install_tokens.seed_if_new(&install_code)?;
 
     // SEC-001/003：rathole noise 静态密钥对（NK 25519）——持久化 0600；private 只进 rathole 配置，
     // public 经 /tunnel（TLS）下发受控端 pin。rathole 默认 transport 是 TCP 明文，必须显式 noise。
@@ -66,7 +71,7 @@ async fn main() -> Result<()> {
         config: config.clone(),
         sidecar: Mutex::new(rathole::RatholeSidecar::new()),
         admin_token,
-        install_code,
+        install_tokens: Mutex::new(install_tokens),
         limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
         password_verify_slots: tokio::sync::Semaphore::new(8),
         ws_limiter: Mutex::new(limiter::Limiter::new(600, Duration::from_secs(60), 600, Duration::from_secs(60))),

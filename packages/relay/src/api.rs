@@ -3,6 +3,7 @@
 use crate::config::RelayConfig;
 use crate::controller_sessions::ControllerSessionStore;
 use crate::grants::GrantStore;
+use crate::install_tokens::InstallTokenStore;
 use crate::limiter::{Attempt, Limiter};
 use crate::rathole::{render_server_config, RatholeSidecar};
 use crate::registry::{verify_password, Registry};
@@ -29,8 +30,8 @@ pub struct AppState {
     pub sidecar: Mutex<RatholeSidecar>,
     /// 管理员令牌（列表/管理操作）
     pub admin_token: String,
-    /// 一次性安装码（受控端首次注册；SEC-001）
-    pub install_code: String,
+    /// 可消费安装令牌（SEC-001，审计三轮#4 修订）：只存哈希；签发/消耗见 InstallTokenStore
+    pub install_tokens: Mutex<InstallTokenStore>,
     /// /connect 限速与锁定（SEC-002）
     pub limiter: Mutex<Limiter>,
     /// scrypt 验证并发上限：验证在 blocking 池执行，但不能让攻击请求无限占用 CPU/内存。
@@ -61,6 +62,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_whalemaid/devices/:id/password", post(update_password))
         .route("/_whalemaid/connect", post(connect))
         .route("/_whalemaid/tunnel-ws", get(tunnel_ws))
+        .route("/_whalemaid/admin/install-tokens", post(issue_install_token).get(list_install_tokens))
         .with_state(state)
 }
 
@@ -97,9 +99,10 @@ async fn reload_config(s: &Arc<AppState>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// SEC-001：受控端首次注册——需一次性安装码；签发每设备凭据与初始隧道 token
+/// SEC-001：受控端首次注册——需可消费安装令牌（默认单次+可选 TTL）；签发每设备凭据与初始隧道 token
 async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    if s.install_code.is_empty() || headers.get("x-install-code").and_then(|v| v.to_str().ok()) != Some(s.install_code.as_str()) {
+    let code = headers.get("x-install-code").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !s.install_tokens.lock().await.verify_and_consume(code) {
         return Err(unauthorized())
     }
     // 审计三轮#4：enrollment secret 为长期共享秘密——按 IP 限速 + 设备配额双闸防批量注册
@@ -270,6 +273,26 @@ async fn list(State(s): State<Arc<AppState>>, headers: HeaderMap) -> Result<(Sta
         })
         .collect();
     Ok((StatusCode::OK, Json(json!({ "devices": devices }))))
+}
+
+/// SEC-001（审计三轮#4 修订）：管理员签发可消费安装令牌——明文仅返回这一次
+async fn issue_install_token(State(s): State<Arc<AppState>>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    if s.admin_token.is_empty() || bearer(&headers) != Some(s.admin_token.as_str()) {
+        return Err(unauthorized())
+    }
+    let b: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
+    let max_uses = b.get("maxUses").and_then(|v| v.as_u64()).unwrap_or(1);
+    let ttl_sec = b.get("ttlSec").and_then(|v| v.as_u64());
+    let token = s.install_tokens.lock().await.issue(max_uses, ttl_sec).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
+    Ok((StatusCode::CREATED, Json(json!({ "token": token, "maxUses": max_uses, "ttlSec": ttl_sec }))))
+}
+
+/// 令牌清单（不含明文/哈希）
+async fn list_install_tokens(State(s): State<Arc<AppState>>, headers: HeaderMap) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    if s.admin_token.is_empty() || bearer(&headers) != Some(s.admin_token.as_str()) {
+        return Err(unauthorized())
+    }
+    Ok((StatusCode::OK, Json(json!({ "tokens": s.install_tokens.lock().await.list() }))))
 }
 
 async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
