@@ -37,6 +37,11 @@ fun startWhaleMaidCore(
 ) {
     val prefs = context.getSharedPreferences("whalemaid-tunnel", Context.MODE_PRIVATE)
     val state = context.getSharedPreferences("whalemaid-state", Context.MODE_PRIVATE)
+    val savedServer = state.getString("server", "") ?: ""
+    val savedDeviceId = state.getString("deviceId", "") ?: ""
+    val savedPassword = state.getString("password", "") ?: ""
+    // A partial native record must never make GET / enter the tunnel with empty credentials.
+    val remembered = savedServer.isNotEmpty() && savedDeviceId.isNotEmpty() && savedPassword.isNotEmpty()
     val core = ProxyCore(
         pinStore = object : PinStore {
             override fun get(key: String): String? = prefs.getString(key, null)
@@ -46,9 +51,9 @@ fun startWhaleMaidCore(
             runCatching { activity?.assets?.open("public/index.html")?.use { String(it.readBytes()) } }
                 .getOrNull() ?: "<html><body>WhaleMaid</body></html>"
         },
-        initialServer = state.getString("server", "") ?: "",
-        initialDeviceId = state.getString("deviceId", "") ?: "",
-        initialPassword = state.getString("password", "") ?: "",
+        initialServer = if (remembered) savedServer else "",
+        initialDeviceId = if (remembered) savedDeviceId else "",
+        initialPassword = if (remembered) savedPassword else "",
         onAuthenticated = { server, deviceId, password ->
             check(state.edit()
                 .putString("server", server)
