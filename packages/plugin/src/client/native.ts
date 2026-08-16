@@ -49,7 +49,8 @@ export function getNativeBridge(): WhaleMaidNativeBridge | null {
   const candidate = capacitor?.Plugins?.WhaleMaidNative
   if (candidate === undefined) return null
   const methods: (keyof WhaleMaidNativeBridge)[] = [
-    'capabilities', 'capturePhoto', 'pickGallery', 'pickFiles', 'readAsset', 'releaseAsset',
+    'capabilities', 'capturePhoto', 'pickGallery', 'pickFiles',
+    'startRecording', 'stopRecording', 'cancelRecording', 'readAsset', 'releaseAsset',
   ]
   if (methods.some(method => typeof candidate[method] !== 'function')) return null
   return candidate as WhaleMaidNativeBridge
