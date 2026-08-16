@@ -17,7 +17,7 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的首启
     -d '{"maxUses":1,"ttlSec":86400}'
   # → {"token":"<一次性明文>",...}；清单: GET /_whalemaid/admin/install-tokens
   ```
-  每个受控端设备配一枚令牌（注册成功即消耗；令牌耗尽/过期/未知 → 401）。
+  每个受控端设备配一枚令牌（注册成功即消耗；令牌耗尽/过期/未知 → 401）。**409 设备已登记不消耗令牌**（先查占用后验码，防止重试循环烧光单次令牌）；宿主凭据丢失时：管理员吊销旧设备记录（DELETE，见运维节）→ 宿主插件下一次重试自动注册成功（用同一枚未消耗的令牌），无需重启宿主。
 
 - 2333：rathole 隧道控制端口（受控端 sidecar 连这里，**noise 加密**）；
 - 5202+：每设备一个转发端口（**只绑 127.0.0.1**，不对外，SEC-004b）；
@@ -45,6 +45,24 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的首启
 1. 主控端首次 `POST /_whalemaid/connect` 使用设备编号+密码（失败限速 5/min、错 5 次锁 5 分钟）→ 返回 `{ deviceId, service, sessionToken, sessionTtlSec, grant, grantTtlSec, tunnelPort }`；`sessionToken` 为 15 分钟、绑定客户端 IP+设备的快速认证令牌，主控端只在进程内保存，后续逐请求以 `{ deviceId, sessionToken }` 换新 grant（响应**不含设备服务端口**，不轮换 rathole token；SEC-002/003/004b）；
 2. 主控端 TLS 连接 `<服务器>:<tunnelPort>`，首行发 `GRANT <grant> <deviceId>`（2 分钟内单次消费）→ 中继校验后转发进 rathole noise 隧道 → 受控端宿主原生 web（官方 /api+WS+UI，密码只走密文，SEC-004）；浏览器/WebView 用 WSS 入口 `/_whalemaid/tunnel-ws`；
 3. 设备在线状态：`GET /_whalemaid/devices/:id/status`（公开、限速，不回 IP/端口/token）。
+
+## V1 语音/视觉增强（BYOK，可选）
+
+插件侧可选挂载两个官方同源路由（主控端经隧道直接调用 `/api/whalemaid/*`，前端零改动；key 只存宿主 dsh-credentials，TM-007/ADR-013）：
+
+```yaml
+- id: whalemaid
+  config:
+    # …上文基础字段…
+    voiceProvider: 'openai'            # openai|groq|dashscope（dashscope 需真实 key 实测）
+    voiceCredentialRef: 'OPENAI_API_KEY'   # dsh-credentials 引用名（宿主凭据服务解析）
+    visionProvider: 'deepseek-ocr'     # deepseek-ocr|qwen-vl|openai-vision|grok-vision|gemini
+    visionCredentialRef: 'DEEPSEEK_KEY'
+```
+
+- `POST /api/whalemaid/voice.transcribe`：body `{ audio: "<base64>", mimeType: "audio/webm" }` → `{ text }`；
+- `POST /api/whalemaid/vision.describe`：body `{ image: "<base64>" }` → `{ description }`；
+- 前置条件：宿主需有 `dsh-credentials` 凭据服务（凭据引用名解析）。宿主无此服务时路由返回明确错误（`宿主无 credentials 服务`），不影响隧道其余功能。
 
 ## 运维
 
