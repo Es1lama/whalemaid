@@ -191,6 +191,9 @@ var RelayHttpError = class extends Error {
   }
 };
 var CREDENTIAL_REJECTED = [401, 403, 404];
+function normalizeFingerprint(value) {
+  return value.replace(/[^0-9a-f]/gi, "").toLowerCase();
+}
 function pinnedRequest(url, options) {
   return new Promise((resolve, reject) => {
     const req = https.request(url, { method: options.method, headers: options.headers, rejectUnauthorized: false }, (res) => {
@@ -210,7 +213,7 @@ function pinnedRequest(url, options) {
         const tlsSocket = socket;
         const cert = tlsSocket.getPeerCertificate(true);
         const fp = createHash("sha256").update(cert.raw ?? Buffer.alloc(0)).digest("hex");
-        if (options.fingerprint && fp !== options.fingerprint.replace(/[^0-9a-f]/gi, "")) {
+        if (options.fingerprint && fp !== normalizeFingerprint(options.fingerprint)) {
           req.destroy(new Error(`\u8BC1\u4E66\u6307\u7EB9\u4E0D\u5339\u914D\uFF08\u9884\u671F ${options.fingerprint.slice(0, 16)}\u2026 \u5B9E\u9645 ${fp.slice(0, 16)}\u2026\uFF09\uFF0C\u62D2\u7EDD\u8FDE\u63A5\uFF08SEC-001 \u9632\u4E2D\u95F4\u4EBA\uFF09`));
         }
       });

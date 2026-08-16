@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { RelayClient, RelayHttpError } from './relay.js'
+import { normalizeFingerprint, RelayClient, RelayHttpError } from './relay.js'
 import type { RelayBinding, RelayClientConfig } from './relay.js'
 
 interface HttpsResponseLike {
@@ -51,6 +51,13 @@ function fake(handler: (url: string, opts: { method: string; headers: Record<str
   return async (url: string, opts: { method: string; headers: Record<string, string>; body?: string; fingerprint: string }): Promise<HttpsResponseLike> =>
     handler(url, opts)
 }
+
+describe('relay certificate fingerprint normalization', () => {
+  it('accepts the uppercase colon-delimited OpenSSL form used in deployment docs', () => {
+    expect(normalizeFingerprint('08:4B:25:C5:8F')).toBe('084b25c58f')
+    expect(normalizeFingerprint('084b25c58f')).toBe('084b25c58f')
+  })
+})
 
 describe('RelayClient 凭据策略', () => {
   it('隧道 500（服务端瞬断）不清凭据——否则重注册必撞 409 永久离线', async () => {

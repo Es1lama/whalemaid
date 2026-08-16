@@ -72,6 +72,10 @@ const CREDENTIAL_REJECTED = [401, 403, 404]
 
 type RequestFn = (url: string, options: { method: string; headers: Record<string, string>; body?: string; fingerprint: string }) => Promise<HttpsResponse>
 
+export function normalizeFingerprint(value: string): string {
+  return value.replace(/[^0-9a-f]/gi, '').toLowerCase()
+}
+
 /** SEC-001：固定指纹的 HTTPS 请求。
  * 刻意 rejectUnauthorized:false——CA 链校验被"证书 SHA-256 指纹固定"替代（SSH TOFU 模型）；
  * 指纹不匹配立即断连，故不因跳过 CA 校验而降低安全性。 */
@@ -94,7 +98,7 @@ function pinnedRequest(url: string, options: { method: string; headers: Record<s
         const tlsSocket = socket as import('node:tls').TLSSocket
         const cert = tlsSocket.getPeerCertificate(true)
         const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
-        if (options.fingerprint && fp !== options.fingerprint.replace(/[^0-9a-f]/gi, '')) {
+        if (options.fingerprint && fp !== normalizeFingerprint(options.fingerprint)) {
           req.destroy(new Error(`证书指纹不匹配（预期 ${options.fingerprint.slice(0, 16)}… 实际 ${fp.slice(0, 16)}…），拒绝连接（SEC-001 防中间人）`))
         }
       })
