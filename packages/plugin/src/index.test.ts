@@ -5,7 +5,27 @@ import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { checkSync } from 'proper-lockfile'
 import { describe, expect, it } from 'vitest'
-import { apply } from './index.js'
+import { apply, createTemporaryRouteServer } from './index.js'
+import type { TemporaryRouteServer } from './temporary-routes.js'
+
+describe('host web route binding', () => {
+  it('preserves the host receiver required by the real webServer.register method', () => {
+    class HostWeb {
+      readonly paths: string[] = []
+
+      register(route: Parameters<TemporaryRouteServer['register']>[0]): () => void {
+        this.paths.push(route.path)
+        return () => void 0
+      }
+    }
+    const host = new HostWeb()
+    const server = createTemporaryRouteServer(host)
+
+    server.register({ kind: 'exact', path: '/api/whalemaid/test', handler: () => void 0 })
+
+    expect(host.paths).toEqual(['/api/whalemaid/test'])
+  })
+})
 
 describe('plugin profile ownership lifecycle', () => {
   it('releases the profile lock on disposal after the no-relay early return', async () => {

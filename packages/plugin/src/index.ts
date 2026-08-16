@@ -16,6 +16,10 @@ export const inject = ['webServer']
 export { Config } from './config.js'
 import type { Config } from './config.js'
 
+export function createTemporaryRouteServer(hostWeb: { register: TemporaryRouteServer['register'] }): TemporaryRouteServer {
+  return { register: hostWeb.register.bind(hostWeb) }
+}
+
 /** 配置由 loader 校验后作为第二参数传入（与 dsh 插件惯例一致），默认值在此兜底 */
 const DEFAULTS: Config = {
   dataDir: '',
@@ -85,10 +89,7 @@ export function apply(ctx: Context, config?: Config): void {
     return
   }
   const temporaryPasswords = new TemporaryPasswordManager(store, relay)
-  const registerRoute = hostWeb.register
-  const temporaryRouteServer: TemporaryRouteServer = {
-    register: route => registerRoute(route),
-  }
+  const temporaryRouteServer = createTemporaryRouteServer(hostWeb as { register: TemporaryRouteServer['register'] })
   ctx.effect(
     () => registerTemporaryPasswordRoutes(temporaryRouteServer, temporaryPasswords, store.deviceId),
     'whalemaid: temporary password routes',

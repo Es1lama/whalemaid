@@ -22,7 +22,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=lib/index.js --external:@deepseek-ai/* --external:node:* && node scripts/build-client.mjs"
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=lib/index.js --external:@deepseek-ai/* --external:node:* --external:proper-lockfile && node scripts/build-client.mjs && node scripts/smoke-built.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
