@@ -245,6 +245,18 @@ class ProxyCore(
                         TunnelHttp.Route.MANAGEMENT -> {
                             NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/html; charset=utf-8", pageHtml())
                         }
+                        // UX-013：连接前查设备在线状态（UX 不再盲试）；只回 registered/online 两个布尔，不回路由秘密
+                        TunnelHttp.Route.STATUS -> {
+                            val bodyBytes = readBody(session) ?: ByteArray(0)
+                            val json = JSONObject(String(bodyBytes, Charsets.UTF_8))
+                            val serverAddr = json.optString("server").removePrefix("https://").removePrefix("http://").trimEnd('/')
+                            val deviceId = json.optString("deviceId")
+                            if (serverAddr.isEmpty() || deviceId.isEmpty()) return jsonResponse(400, """{"error":"server/deviceId 必填"}""")
+                            val (code, respBody) = relayRequest(serverAddr, "/_whalemaid/devices/$deviceId/status")
+                            if (code != 200) return jsonResponse(502, """{"error":"服务端不可达: $code"}""")
+                            val st = JSONObject(respBody)
+                            jsonResponse(200, """{"registered":${st.optBoolean("registered")},"online":${st.optBoolean("online")}}""")
+                        }
                         TunnelHttp.Route.CONNECT -> {
                             val bodyBytes = readBody(session) ?: ByteArray(0)
                             val json = JSONObject(String(bodyBytes, Charsets.UTF_8))

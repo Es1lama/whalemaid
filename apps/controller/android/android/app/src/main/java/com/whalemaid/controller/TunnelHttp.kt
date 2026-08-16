@@ -10,12 +10,14 @@ object TunnelHttp {
     /** 受控端宿主 web 权威（隧道对端；官方信任栅栏按此权威放行） */
     const val HOST_AUTHORITY = "127.0.0.1:3181"
     const val CTRL_CONNECT_PATH = "/_ctrl/connect"
+    const val CTRL_STATUS_PATH = "/_ctrl/status"
 
-    enum class Route { MANAGEMENT, CONNECT, TUNNEL }
+    enum class Route { MANAGEMENT, CONNECT, STATUS, TUNNEL }
 
-    /** 路由决策：POST /_ctrl/connect → 连接端点；未连接 GET / → 设备管理页；其余（含已连接 GET /）→ 隧道 */
+    /** 路由决策：POST /_ctrl/connect → 连接端点；POST /_ctrl/status → 连接前在线状态查询；未连接 GET / → 设备管理页；其余 → 隧道 */
     fun route(uri: String, method: String, connected: Boolean): Route = when {
         uri == CTRL_CONNECT_PATH && method == "POST" -> Route.CONNECT
+        uri == CTRL_STATUS_PATH && method == "POST" && !connected -> Route.STATUS
         uri == "/" && method == "GET" && !connected -> Route.MANAGEMENT
         else -> Route.TUNNEL
     }
