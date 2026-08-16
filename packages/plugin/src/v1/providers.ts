@@ -28,9 +28,18 @@ export interface ProviderCall {
   body: Buffer
 }
 
+function audioFilename(mimeType: string): string {
+  const mime = mimeType.toLowerCase()
+  if (mime.includes('mp4') || mime.includes('m4a')) return 'audio.m4a'
+  if (mime.includes('mpeg')) return 'audio.mp3'
+  if (mime.includes('ogg')) return 'audio.ogg'
+  return 'audio.webm'
+}
+
 /** 语音请求契约（JSON base64 上传，三厂通用；字段名按厂微调） */
 export function voiceCall(req: VoiceRequest): ProviderCall {
   const boundary = `----whalemaid-${Math.random().toString(36).slice(2)}`
+  const filename = audioFilename(req.mimeType)
   switch (req.provider) {
     case 'openai':
       return {
@@ -38,7 +47,7 @@ export function voiceCall(req: VoiceRequest): ProviderCall {
         headers: { authorization: `Bearer ${req.apiKey}`, 'content-type': `multipart/form-data; boundary=${boundary}` },
         body: multipartBody([
           ['model', 'whisper-1'],
-          ['file', req.audio, req.mimeType, 'audio.webm'],
+          ['file', req.audio, req.mimeType, filename],
         ], boundary),
       }
     case 'groq':
@@ -47,7 +56,7 @@ export function voiceCall(req: VoiceRequest): ProviderCall {
         headers: { authorization: `Bearer ${req.apiKey}`, 'content-type': `multipart/form-data; boundary=${boundary}` },
         body: multipartBody([
           ['model', 'whisper-large-v3'],
-          ['file', req.audio, req.mimeType, 'audio.webm'],
+          ['file', req.audio, req.mimeType, filename],
         ], boundary),
       }
     case 'dashscope':

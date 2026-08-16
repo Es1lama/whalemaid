@@ -48,7 +48,7 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的首启
 
 ## V1 语音/视觉增强（BYOK，可选）
 
-插件侧可选挂载两个官方同源路由（主控端经隧道直接调用 `/api/whalemaid/*`，前端零改动；key 只存宿主 dsh-credentials，TM-007/ADR-013）：
+插件侧可选挂载两个官方同源路由（WhaleMaid client module 经隧道调用 `/api/whalemaid/*`，官方 DSH 调用点不改；key 只存宿主 dsh-credentials，TM-007/ADR-013）：
 
 ```yaml
 - id: whalemaid
@@ -60,7 +60,7 @@ ADMIN_TOKEN='换成你的强随机密钥' ADMIN_INSTALL_CODE='换成你的首启
     visionCredentialRef: 'DEEPSEEK_KEY'
 ```
 
-- `POST /api/whalemaid/voice.transcribe`：body `{ audio: "<base64>", mimeType: "audio/webm" }` → `{ text }`；
+- `POST /api/whalemaid/voice.transcribe`：body `{ audio: "<base64>", mimeType: "audio/mp4|audio/webm" }` → `{ text }`；Android client module 录音停止后调用并通过官方 `inputActions.setDraft` 回填；
 - `POST /api/whalemaid/vision.describe`：body `{ image: "<base64>" }` → `{ description }`；
 - 前置条件：宿主需有 `dsh-credentials` 凭据服务（凭据引用名解析）。宿主无此服务时路由返回明确错误（`宿主无 credentials 服务`），不影响隧道其余功能。
 

@@ -287,8 +287,16 @@ var RelayClient = class {
 };
 
 // src/v1/providers.ts
+function audioFilename(mimeType) {
+  const mime = mimeType.toLowerCase();
+  if (mime.includes("mp4") || mime.includes("m4a")) return "audio.m4a";
+  if (mime.includes("mpeg")) return "audio.mp3";
+  if (mime.includes("ogg")) return "audio.ogg";
+  return "audio.webm";
+}
 function voiceCall(req) {
   const boundary = `----whalemaid-${Math.random().toString(36).slice(2)}`;
+  const filename = audioFilename(req.mimeType);
   switch (req.provider) {
     case "openai":
       return {
@@ -296,7 +304,7 @@ function voiceCall(req) {
         headers: { authorization: `Bearer ${req.apiKey}`, "content-type": `multipart/form-data; boundary=${boundary}` },
         body: multipartBody([
           ["model", "whisper-1"],
-          ["file", req.audio, req.mimeType, "audio.webm"]
+          ["file", req.audio, req.mimeType, filename]
         ], boundary)
       };
     case "groq":
@@ -305,7 +313,7 @@ function voiceCall(req) {
         headers: { authorization: `Bearer ${req.apiKey}`, "content-type": `multipart/form-data; boundary=${boundary}` },
         body: multipartBody([
           ["model", "whisper-large-v3"],
-          ["file", req.audio, req.mimeType, "audio.webm"]
+          ["file", req.audio, req.mimeType, filename]
         ], boundary)
       };
     case "dashscope":

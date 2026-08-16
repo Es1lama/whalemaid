@@ -113,8 +113,38 @@ function pasteFilesIntoComposer(files) {
   return true;
 }
 
+// src/client/voice.ts
+function bytesToBase64(bytes) {
+  const parts = [];
+  for (let offset = 0; offset < bytes.length; offset += 32768) {
+    const chunk = bytes.subarray(offset, offset + 32768);
+    let binary = "";
+    for (const byte of chunk) binary += String.fromCharCode(byte);
+    parts.push(binary);
+  }
+  return globalThis.btoa(parts.join(""));
+}
+async function transcribeAudio(file, fetchImpl = fetch) {
+  const audio = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+  const response = await fetchImpl("/api/whalemaid/voice.transcribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ audio, mimeType: file.type || "audio/mp4" })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof payload.error === "string" ? payload.error : `\u8BED\u97F3\u8F6C\u5F55\u5931\u8D25 (${response.status})`);
+  }
+  if (typeof payload.text !== "string" || payload.text.trim() === "") throw new Error("\u8BED\u97F3\u8F6C\u5F55\u54CD\u5E94\u7F3A\u5C11 text");
+  return payload.text.trim();
+}
+function appendTranscript(draft, transcript) {
+  if (draft === "") return transcript;
+  return `${draft}${/\s$/u.test(draft) ? "" : " "}${transcript}`;
+}
+
 // src/client/AttachmentButton.css
-var AttachmentButton_default = ".whalemaid-attachment-root {\n  position: relative;\n  flex: none;\n}\n\n.whalemaid-attachment-button {\n  display: grid;\n  place-items: center;\n  width: 28px;\n  height: 28px;\n  padding: 0;\n  border: none;\n  border-radius: 999px;\n  background: var(--dsw-specific-selector);\n  color: var(--dsw-alias-label-primary);\n  cursor: pointer;\n}\n\n.whalemaid-attachment-button:hover:not(:disabled) {\n  background: var(--dsw-alias-interactive-bg-hover-solid);\n}\n\n.whalemaid-attachment-button:focus-visible,\n.whalemaid-attachment-option:focus-visible {\n  outline: 2px solid var(--dsw-alias-label-tertiary);\n  outline-offset: 2px;\n}\n\n.whalemaid-attachment-button:disabled {\n  cursor: default;\n  opacity: 0.45;\n}\n\n.whalemaid-attachment-menu {\n  position: absolute;\n  z-index: 20;\n  bottom: calc(100% + 8px);\n  left: 0;\n  display: grid;\n  gap: 2px;\n  min-width: 112px;\n  padding: 4px;\n  border: 1px solid var(--dsw-alias-border-inverted);\n  border-radius: 8px;\n  background: var(--dsw-specific-tip);\n}\n\n.whalemaid-attachment-option {\n  min-height: 32px;\n  padding: 6px 10px;\n  border: none;\n  border-radius: 5px;\n  background: transparent;\n  color: var(--dsw-alias-label-primary);\n  font: inherit;\n  text-align: left;\n  white-space: nowrap;\n  cursor: pointer;\n}\n\n.whalemaid-attachment-option:hover:not(:disabled) {\n  background: var(--dsw-alias-interactive-bg-hover-solid);\n}\n\n.whalemaid-attachment-option:disabled {\n  cursor: default;\n  opacity: 0.5;\n}\n\n.whalemaid-attachment-error {\n  position: absolute;\n  z-index: 21;\n  bottom: calc(100% + 8px);\n  left: 0;\n  max-width: min(260px, 70vw);\n  padding: 6px 8px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 6px;\n  background: var(--dsw-specific-tip);\n  color: var(--dsw-alias-label-tertiary);\n  font-size: 12px;\n  line-height: 1.35;\n  white-space: normal;\n}\n";
+var AttachmentButton_default = ".whalemaid-attachment-root {\n  position: relative;\n  flex: none;\n}\n\n.whalemaid-attachment-button {\n  display: grid;\n  place-items: center;\n  width: 28px;\n  height: 28px;\n  padding: 0;\n  border: none;\n  border-radius: 999px;\n  background: var(--dsw-specific-selector);\n  color: var(--dsw-alias-label-primary);\n  cursor: pointer;\n}\n\n.whalemaid-attachment-button:hover:not(:disabled) {\n  background: var(--dsw-alias-interactive-bg-hover-solid);\n}\n\n.whalemaid-attachment-button:focus-visible,\n.whalemaid-attachment-option:focus-visible {\n  outline: 2px solid var(--dsw-alias-label-tertiary);\n  outline-offset: 2px;\n}\n\n.whalemaid-attachment-button:disabled {\n  cursor: default;\n  opacity: 0.45;\n}\n\n.whalemaid-attachment-menu {\n  position: absolute;\n  z-index: 20;\n  bottom: calc(100% + 8px);\n  left: 0;\n  display: grid;\n  gap: 2px;\n  min-width: 112px;\n  padding: 4px;\n  border: 1px solid var(--dsw-alias-border-inverted);\n  border-radius: 8px;\n  background: var(--dsw-specific-tip);\n}\n\n.whalemaid-attachment-option {\n  min-height: 32px;\n  padding: 6px 10px;\n  border: none;\n  border-radius: 5px;\n  background: transparent;\n  color: var(--dsw-alias-label-primary);\n  font: inherit;\n  text-align: left;\n  white-space: nowrap;\n  cursor: pointer;\n}\n\n.whalemaid-attachment-option:hover:not(:disabled) {\n  background: var(--dsw-alias-interactive-bg-hover-solid);\n}\n\n.whalemaid-attachment-option:disabled {\n  cursor: default;\n  opacity: 0.5;\n}\n\n.whalemaid-attachment-stop {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n\n.whalemaid-attachment-recording,\n.whalemaid-attachment-error {\n  position: absolute;\n  z-index: 21;\n  bottom: calc(100% + 8px);\n  left: 0;\n  max-width: min(260px, 70vw);\n  padding: 6px 8px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 6px;\n  background: var(--dsw-specific-tip);\n  color: var(--dsw-alias-label-tertiary);\n  font-size: 12px;\n  line-height: 1.35;\n  white-space: normal;\n}\n";
 
 // src/client/AttachmentButton.tsx
 var import_jsx_runtime = require("react/jsx-runtime");
@@ -123,6 +153,8 @@ var classes = {
   button: "whalemaid-attachment-button",
   menu: "whalemaid-attachment-menu",
   option: "whalemaid-attachment-option",
+  stop: "whalemaid-attachment-stop",
+  recording: "whalemaid-attachment-recording",
   error: "whalemaid-attachment-error"
 };
 function installStyles() {
@@ -139,13 +171,19 @@ function installStyles() {
 function isCancelled(error) {
   return error instanceof Error && error.message === "USER_CANCELLED";
 }
-function AttachmentButton({ input, getBridge }) {
+function AttachmentButton({ input, inputActions, getBridge }) {
   const bridge = getBridge();
   const rootRef = (0, import_react.useRef)(null);
+  const recordingRef = (0, import_react.useRef)(null);
   const [open, setOpen] = (0, import_react.useState)(false);
   const [busy, setBusy] = (0, import_react.useState)(false);
+  const [recordingHandle, setRecordingHandle] = (0, import_react.useState)(null);
   const [error, setError] = (0, import_react.useState)(null);
   (0, import_react.useEffect)(() => installStyles(), []);
+  (0, import_react.useEffect)(() => () => {
+    const handle = recordingRef.current;
+    if (handle !== null && bridge !== null) void bridge.cancelRecording({ handle }).catch(() => void 0);
+  }, [bridge]);
   (0, import_react.useEffect)(() => {
     if (!open) return;
     const close = (event) => {
@@ -157,8 +195,8 @@ function AttachmentButton({ input, getBridge }) {
       document.removeEventListener("pointerdown", close);
     };
   }, [open]);
-  if (bridge === null) return null;
-  const disabled = busy || input.phase !== "plain";
+  if (bridge === null || inputActions === void 0) return null;
+  const disabled = busy || recordingHandle === null && input.phase !== "plain";
   const pick = async (kind) => {
     setBusy(true);
     setError(null);
@@ -174,24 +212,61 @@ function AttachmentButton({ input, getBridge }) {
       setBusy(false);
     }
   };
+  const beginRecording = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await bridge.startRecording();
+      if (typeof result.handle !== "string" || result.handle === "") throw new Error("RECORDING_START_FAILED");
+      recordingRef.current = result.handle;
+      setRecordingHandle(result.handle);
+      setOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "\u65E0\u6CD5\u5F00\u59CB\u5F55\u97F3");
+      setOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const finishRecording = async () => {
+    const handle = recordingRef.current;
+    if (handle === null) return;
+    recordingRef.current = null;
+    setRecordingHandle(null);
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await bridge.stopRecording({ handle });
+      const [file] = await readNativeAssets(bridge, response);
+      if (file === void 0) throw new Error("ASSET_UNREADABLE");
+      const transcript = await transcribeAudio(file);
+      inputActions.setDraft(appendTranscript(input.draft, transcript));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "\u8BED\u97F3\u8F6C\u5F55\u5931\u8D25");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const buttonLabel = recordingHandle === null ? "\u6DFB\u52A0\u56FE\u7247\u6216\u8BED\u97F3" : "\u505C\u6B62\u5F55\u97F3";
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { ref: rootRef, className: classes.root, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tooltip, { label: "\u6DFB\u52A0\u56FE\u7247", side: "top", delayMs: 500, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tooltip, { label: buttonLabel, side: "top", delayMs: 500, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
       "button",
       {
         type: "button",
         className: classes.button,
-        "aria-label": "\u6DFB\u52A0\u56FE\u7247",
-        "aria-expanded": open,
-        "aria-haspopup": "menu",
+        "aria-label": buttonLabel,
+        "aria-expanded": recordingHandle === null ? open : void 0,
+        "aria-haspopup": recordingHandle === null ? "menu" : void 0,
         disabled,
         onMouseDown: (event) => {
           event.preventDefault();
         },
         onClick: () => {
           setError(null);
-          setOpen((value) => !value);
+          if (recordingHandle !== null) void finishRecording();
+          else setOpen((value) => !value);
         },
-        children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.IconPaperclipOutline16, { size: 16 })
+        children: recordingHandle === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.IconPaperclipOutline16, { size: 16 }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: classes.stop, "aria-hidden": true })
       }
     ) }),
     open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: classes.menu, role: "menu", "aria-label": "\u6DFB\u52A0\u56FE\u7247", children: [
@@ -203,8 +278,12 @@ function AttachmentButton({ input, getBridge }) {
       }, children: "\u76F8\u518C" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: classes.option, role: "menuitem", disabled: busy, onClick: () => {
         void pick("file");
-      }, children: "\u6587\u4EF6" })
+      }, children: "\u6587\u4EF6" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: classes.option, role: "menuitem", disabled: busy, onClick: () => {
+        void beginRecording();
+      }, children: "\u5F55\u97F3" })
     ] }),
+    recordingHandle !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: classes.recording, role: "status", children: "\u5F55\u97F3\u4E2D" }),
     error !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: classes.error, role: "status", "aria-live": "polite", children: error })
   ] });
 }

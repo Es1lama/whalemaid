@@ -13,6 +13,9 @@ function bridgeFor(bytesById: Record<string, Uint8Array>): WhaleMaidNativeBridge
     capturePhoto: vi.fn(),
     pickGallery: vi.fn(),
     pickFiles: vi.fn(),
+    startRecording: vi.fn(),
+    stopRecording: vi.fn(),
+    cancelRecording: vi.fn(),
     readAsset: vi.fn(async ({ id, offset, length }) => {
       const source = bytesById[id]
       if (source === undefined) throw new Error('ASSET_NOT_FOUND')

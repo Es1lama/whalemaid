@@ -21,11 +21,18 @@ interface NativeChunkResponse {
   readonly done: boolean
 }
 
+interface NativeRecordingResponse {
+  readonly handle: string
+}
+
 export interface WhaleMaidNativeBridge {
   capabilities(): Promise<{ readonly camera: boolean; readonly gallery: boolean; readonly files: boolean }>
   capturePhoto(): Promise<NativeAssetResponse>
   pickGallery(options?: { readonly multiple?: boolean }): Promise<NativeAssetResponse>
   pickFiles(options?: { readonly multiple?: boolean; readonly mimeTypes?: readonly string[] }): Promise<NativeAssetResponse>
+  startRecording(): Promise<NativeRecordingResponse>
+  stopRecording(options: { readonly handle: string }): Promise<NativeAssetResponse>
+  cancelRecording(options: { readonly handle: string }): Promise<void>
   readAsset(options: { readonly id: string; readonly offset: number; readonly length: number }): Promise<NativeChunkResponse>
   releaseAsset(options: { readonly id: string }): Promise<void>
 }

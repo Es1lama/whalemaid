@@ -67,6 +67,14 @@
   opacity: 0.5;
 }
 
+.whalemaid-attachment-stop {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.whalemaid-attachment-recording,
 .whalemaid-attachment-error {
   position: absolute;
   z-index: 21;

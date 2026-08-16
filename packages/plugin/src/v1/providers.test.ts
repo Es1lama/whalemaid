@@ -21,6 +21,11 @@ describe('voiceCall', () => {
     expect(call.body.toString('utf8')).toContain('whisper-large-v3')
   })
 
+  it('native mp4 recording keeps a matching m4a filename', () => {
+    const call = voiceCall({ provider: 'openai', apiKey: 'k', audio: Buffer.from('x'), mimeType: 'audio/mp4' })
+    expect(call.body.toString('utf8')).toContain('filename="audio.m4a"')
+  })
+
   it('dashscope 未经实测拒绝（audit#7）', () => {
     expect(() => voiceCall({ provider: 'dashscope', apiKey: 'k', audio: Buffer.from('x'), mimeType: 'audio/webm' }))
       .toThrow(/未经真实 key 实测/)
