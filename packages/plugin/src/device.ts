@@ -30,8 +30,3 @@ export function generateDeviceId(): string {
 export function generatePassword(): string {
   return randomBytes(9).toString('base64url').slice(0, 12)
 }
-
-/** 一次性 nonce（挑战-应答，TM-004） */
-export function generateNonce(): string {
-  return randomBytes(16).toString('base64url')
-}

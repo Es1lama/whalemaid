@@ -60,7 +60,7 @@ export function apply(ctx: Context, config?: Config): void {
     return
   }
   if (!hostWeb?.port) {
-    ctx.logger.error('[whalemaid] 宿主无 web 服务（webServer.port 缺失）：本插件依赖官方 web 载体，不做任何自建监听')
+    ctx.logger.error('[whalemaid] 宿主无 web 服务（webServer.port 缺失）：本插件依赖官方 web 载体，插件零监听')
     return
   }
   ctx.logger.info(`[whalemaid] 设备编号 ${store.deviceId}（长期密码见 ${store.file}）；隧道目标 = 宿主原生 web:${hostWeb.port}；本地管理 token=${store.adminToken}`)
@@ -80,7 +80,7 @@ export function apply(ctx: Context, config?: Config): void {
   }
   void tryStart()
 
-  // REQ-002 密码轮换入口（受控端本机操作，走官方 web 路由机制而非自建监听）：
+  // REQ-002 密码轮换入口（受控端本机操作，走官方 web 路由机制，插件零监听）：
   // POST /whalemaid/rotate-password + x-whalemaid-token（token 打印在宿主日志）
   try {
     const web = ctx as unknown as {

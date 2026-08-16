@@ -85,7 +85,7 @@ apps/controller/
 | `dsh-web-frontend` | 应用入口、路由、页面、会话侧栏、消息/轨迹、审批、设置、主题、样式、静态资源 | `src/upstream/web-frontend/` | 主体原样引入；只在入口、路由边界和响应式样式处接适配层 |
 | `dsh-client-*` 核心包 | API client、请求类型、会话/任务状态、流式事件解析、错误模型、缓存或状态管理 | `src/upstream/client-core/` | 原样优先；基地址固定为同源，认证与设备选择不得侵入每个调用点 |
 | `dsh-client-*` UI/React 包 | hooks、providers、UI 组件、会话与审批组件 | `src/upstream/client-react/` | 原样优先；仅替换顶层 provider 注入与平台能力入口 |
-| `dsh-host-apiproxy` 浏览器侧契约 | `/api` 路由类型、fetch/SSE/流式协议、browse seam、附件相关契约 | `src/upstream/api-contract/` | 只引入浏览器所需契约；不把宿主执行逻辑打进主控端 |
+| `dsh-host-apiproxy` 浏览器侧契约 | `/api` 路由类型、fetch/WebSocket/流式协议、browse seam、附件相关契约 | `src/upstream/api-contract/` | 只引入浏览器所需契约；不把宿主执行逻辑打进主控端 |
 | 上游共享资源 | 图标、字体、主题 token、国际化文本 | 相应 `src/upstream/**` 或 `public/` | 保持命名和版权；新增 WhaleMaid 文案独立命名空间 |
 | 上游测试与 fixtures | 与被移植前端行为直接相关的单测、协议 fixture | 与模块同目录或统一测试目录 | 能运行则同步引入；依赖上游私有环境的测试记录为不可移植项 |
 
@@ -110,7 +110,7 @@ apps/controller/
 | 文件浏览 seam | 为官方 browse 契约补移动目录树、面包屑、目录选择器 | 在主控端直接读取受控端文件系统 | UX-017、ADR-008 |
 | 附件入口 | 将相机、相册和本地文件结果转换为官方附件输入 | 绕过 DSH 附件管道直传第三方视觉服务 | UX-018、ADR-013/025 |
 | 输入框语音 | 增加录音按钮和转写回填，不改变文本提交协议 | 将原始音频静默上传到未授权服务 | UX-018、ADR-009/025 |
-| 错误边界 | 把网关错误映射为设备离线、密码错误、吊销、网络失败 | 向普通用户展示 IP、端口、rathole、SSE 等实现词 | UX-008/011/021 |
+| 错误边界 | 把网关错误映射为设备离线、密码错误、吊销、网络失败 | 向普通用户展示 IP、端口、rathole 等实现词 | UX-008/011/021 |
 
 ### 2.4 移植验收
 
