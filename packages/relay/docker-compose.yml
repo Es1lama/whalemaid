@@ -10,6 +10,7 @@ services:
       - "9443:9443" # 主控端隧道入口（TLS + 一次性 grant；SEC-004b）
     environment:
       - ADMIN_TOKEN=${ADMIN_TOKEN:?请设置管理密钥}
+      - ADMIN_INSTALL_CODE=${ADMIN_INSTALL_CODE:?请设置首启安装码(单次可消费)}
       - WHALEMAID_RELAY_LISTEN=0.0.0.0:9080
       - WHALEMAID_RELAY_TUNNEL_LISTEN=0.0.0.0:9443
       - WHALEMAID_RELAY_DATA=/data
