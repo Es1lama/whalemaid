@@ -4,6 +4,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Store } from './store.js'
 import { RelayClient } from './relay.js'
+import { TemporaryPasswordManager } from './temporary.js'
+import { registerTemporaryPasswordRoutes, type TemporaryRouteServer } from './temporary-routes.js'
 import * as v1 from './v1/routes.js'
 
 export const name = 'whalemaid'
@@ -35,7 +37,9 @@ export function apply(ctx: Context, config?: Config): void {
 
   // audit#3（D-022 原生同源透传）：宿主自带的 web 服务就是官方 /api + WS 下联 + 前端 UI 的唯一载体——
   // 隧道 local_addr 直指该端口，受控端不重造任何 RPC（实测：POST /api/session.list 官方信封 200）
-  const hostWeb = (ctx as unknown as { webServer?: { port?: number; host?: string } }).webServer
+  const hostWeb = (ctx as unknown as {
+    webServer?: { port?: number; host?: string; register?: TemporaryRouteServer['register'] }
+  }).webServer
 
   // 中继接入（docs/deploy-server.md）：安装码注册（设备编号+密码哈希）→ 隧道 → 凭据心跳
   // SEC-001：relayFingerprint 为空 = 拒绝接入（rejectUnauthorized:false 下无指纹等于裸奔）
@@ -76,6 +80,19 @@ export function apply(ctx: Context, config?: Config): void {
     ctx.logger.error('[whalemaid] 宿主无 web 服务（webServer.port 缺失）：本插件依赖官方 web 载体，插件零监听')
     return
   }
+  if (!hostWeb.register) {
+    ctx.logger.error('[whalemaid] 宿主 webServer.register 缺失：无法挂载临时密码管理面，拒绝部分启用')
+    return
+  }
+  const temporaryPasswords = new TemporaryPasswordManager(store, relay)
+  const registerRoute = hostWeb.register
+  const temporaryRouteServer: TemporaryRouteServer = {
+    register: route => registerRoute(route),
+  }
+  ctx.effect(
+    () => registerTemporaryPasswordRoutes(temporaryRouteServer, temporaryPasswords, store.deviceId),
+    'whalemaid: temporary password routes',
+  )
   ctx.logger.info(`[whalemaid] 设备编号 ${store.deviceId}（长期密码见 ${store.file}）；隧道目标 = 宿主原生 web:${hostWeb.port}；本地管理 token=${store.adminToken}`)
 
   // UX-009/022（受控端知情与首次启用引导，控制台级）：

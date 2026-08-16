@@ -1639,6 +1639,10 @@ function generateDeviceId() {
 function generatePassword() {
   return randomBytes(9).toString("base64url").slice(0, 12);
 }
+function generateTemporaryPassword() {
+  const raw = base32(randomBytes(8), [4, 4]);
+  return `WMT-${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
+}
 
 // src/store.ts
 var EMPTY_TEMPORARY_PASSWORD = {
@@ -2012,6 +2016,140 @@ var RelayClient = class {
   }
 };
 
+// src/temporary.ts
+var TemporaryPasswordManager = class {
+  constructor(store, relay) {
+    this.store = store;
+    this.relay = relay;
+  }
+  snapshot(now = Math.floor(Date.now() / 1e3)) {
+    const current = this.store.temporaryPassword;
+    if (current.state === "active" && now > current.expiresAt) {
+      this.store.syncTemporaryPasswordStatus({
+        state: "expired",
+        expiresAt: current.expiresAt,
+        generation: current.generation
+      });
+    }
+    return this.store.temporaryPassword;
+  }
+  async issue(ttlSec) {
+    if (!Number.isInteger(ttlSec) || ttlSec < 60 || ttlSec > 86400) {
+      throw new Error("ttlSec \u5FC5\u987B\u662F 60 \u5230 86400 \u4E4B\u95F4\u7684\u6574\u6570");
+    }
+    const password = generateTemporaryPassword();
+    const issued = await this.relay.issueTemporaryPassword(password, ttlSec);
+    if (issued.state !== "active") throw new Error(`\u4E2D\u7EE7\u8FD4\u56DE\u4E86\u65E0\u6548\u4E34\u65F6\u5BC6\u7801\u72B6\u6001: ${issued.state}`);
+    const record = { password, ...issued };
+    this.store.setTemporaryPassword(record);
+    return record;
+  }
+  async revoke() {
+    await this.relay.revokeTemporaryPassword();
+    const current = this.store.temporaryPassword;
+    this.store.syncTemporaryPasswordStatus({
+      state: "revoked",
+      expiresAt: current.expiresAt,
+      generation: current.generation
+    });
+  }
+};
+
+// src/temporary-routes.ts
+var CLIENT_HEADER = "x-whalemaid-client";
+var BadRequestError = class extends Error {
+};
+function respond(res, status, value) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(value));
+}
+function authorized(req) {
+  return req.headers[CLIENT_HEADER] === "1";
+}
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    const contentType = req.headers["content-type"];
+    if (typeof contentType !== "string" || !contentType.toLowerCase().startsWith("application/json")) {
+      reject(new BadRequestError("content-type \u5FC5\u987B\u662F application/json"));
+      return;
+    }
+    const chunks = [];
+    let size = 0;
+    req.on?.("data", (chunk) => {
+      const value = Buffer.from(chunk);
+      size += value.length;
+      if (size <= 4096) chunks.push(value);
+    });
+    req.on?.("end", () => {
+      if (size > 4096) {
+        reject(new BadRequestError("\u8BF7\u6C42\u4F53\u8FC7\u5927"));
+        return;
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        reject(new BadRequestError("JSON \u65E0\u6548"));
+      }
+    });
+    req.on?.("error", reject);
+  });
+}
+function registerTemporaryPasswordRoutes(server, manager, deviceId) {
+  const disposeDevice = server.register({
+    kind: "exact",
+    path: "/api/whalemaid/device",
+    handler: (req, res) => {
+      if (!authorized(req)) {
+        respond(res, 403, { error: "forbidden" });
+        return;
+      }
+      if (req.method !== "GET") {
+        respond(res, 405, { error: "method not allowed" });
+        return;
+      }
+      respond(res, 200, { deviceId, temporaryPassword: manager.snapshot() });
+    }
+  });
+  const disposeTemporary = server.register({
+    kind: "exact",
+    path: "/api/whalemaid/temporary-password",
+    handler: (req, res) => {
+      if (!authorized(req)) {
+        respond(res, 403, { error: "forbidden" });
+        return;
+      }
+      if (req.method === "DELETE") {
+        void manager.revoke().then(() => {
+          respond(res, 200, { deviceId, temporaryPassword: manager.snapshot() });
+        }).catch((error) => {
+          respond(res, 502, { error: error instanceof Error ? error.message : String(error) });
+        });
+        return;
+      }
+      if (req.method !== "POST") {
+        respond(res, 405, { error: "method not allowed" });
+        return;
+      }
+      void readJson(req).then((body) => {
+        const ttlSec = Number(body.ttlSec);
+        if (!Number.isInteger(ttlSec) || ttlSec < 60 || ttlSec > 86400) {
+          throw new BadRequestError("ttlSec \u5FC5\u987B\u662F 60 \u5230 86400 \u4E4B\u95F4\u7684\u6574\u6570");
+        }
+        return manager.issue(ttlSec);
+      }).then((temporaryPassword) => {
+        respond(res, 200, { deviceId, temporaryPassword });
+      }).catch((error) => {
+        const status = error instanceof BadRequestError ? 400 : 502;
+        respond(res, status, { error: error instanceof Error ? error.message : String(error) });
+      });
+    }
+  });
+  return () => {
+    disposeTemporary();
+    disposeDevice();
+  };
+}
+
 // src/v1/providers.ts
 function audioFilename(mimeType) {
   const mime = mimeType.toLowerCase();
@@ -2286,6 +2424,19 @@ function apply(ctx, config) {
     ctx.logger.error("[whalemaid] \u5BBF\u4E3B\u65E0 web \u670D\u52A1\uFF08webServer.port \u7F3A\u5931\uFF09\uFF1A\u672C\u63D2\u4EF6\u4F9D\u8D56\u5B98\u65B9 web \u8F7D\u4F53\uFF0C\u63D2\u4EF6\u96F6\u76D1\u542C");
     return;
   }
+  if (!hostWeb.register) {
+    ctx.logger.error("[whalemaid] \u5BBF\u4E3B webServer.register \u7F3A\u5931\uFF1A\u65E0\u6CD5\u6302\u8F7D\u4E34\u65F6\u5BC6\u7801\u7BA1\u7406\u9762\uFF0C\u62D2\u7EDD\u90E8\u5206\u542F\u7528");
+    return;
+  }
+  const temporaryPasswords = new TemporaryPasswordManager(store, relay);
+  const registerRoute = hostWeb.register;
+  const temporaryRouteServer = {
+    register: (route) => registerRoute(route)
+  };
+  ctx.effect(
+    () => registerTemporaryPasswordRoutes(temporaryRouteServer, temporaryPasswords, store.deviceId),
+    "whalemaid: temporary password routes"
+  );
   ctx.logger.info(`[whalemaid] \u8BBE\u5907\u7F16\u53F7 ${store.deviceId}\uFF08\u957F\u671F\u5BC6\u7801\u89C1 ${store.file}\uFF09\uFF1B\u96A7\u9053\u76EE\u6807 = \u5BBF\u4E3B\u539F\u751F web:${hostWeb.port}\uFF1B\u672C\u5730\u7BA1\u7406 token=${store.adminToken}`);
   ctx.logger.info(`[whalemaid] ==== WhaleMaid \u53D7\u63A7\u7AEF\u8BF4\u660E ====
   \xB7 \u8BBE\u5907\u7F16\u53F7: ${store.deviceId}\uFF08\u4E3B\u63A7\u7AEF\u7528\u300C\u7F16\u53F7+\u957F\u671F\u5BC6\u7801\u300D\u8FDE\u63A5\uFF0C\u5168\u7A0B\u65E0 IP\uFF09
