@@ -19,12 +19,14 @@ class ControllerCredentialSession {
         private set
     @Volatile var password: String = ""
         private set
+    @Volatile var hostAuthority: String = ""
+        private set
     @Volatile var authToken: String = ""
     @Volatile var credentialKind: CredentialKind = CredentialKind.LONG_TERM
         private set
 
     val connected: Boolean
-        get() = server.isNotEmpty() && deviceId.isNotEmpty() && authToken.isNotEmpty()
+        get() = server.isNotEmpty() && deviceId.isNotEmpty() && hostAuthority.isNotEmpty() && authToken.isNotEmpty()
 
     fun commit(
         server: String,
@@ -32,13 +34,30 @@ class ControllerCredentialSession {
         password: String,
         credentialKind: CredentialKind,
         authToken: String,
+        hostAuthority: String,
     ) {
         require(authToken.isNotEmpty()) { "relay response missing sessionToken" }
+        require(TunnelHttp.isValidHostAuthority(hostAuthority)) { "relay response missing valid hostAuthority" }
         this.server = server
         this.deviceId = deviceId
         this.password = if (credentialKind == CredentialKind.LONG_TERM) password else ""
         this.credentialKind = credentialKind
         this.authToken = authToken
+        this.hostAuthority = hostAuthority
+    }
+
+    fun updateHostAuthority(value: String) {
+        require(TunnelHttp.isValidHostAuthority(value)) { "relay response missing valid hostAuthority" }
+        hostAuthority = value
+    }
+
+    fun clear() {
+        server = ""
+        deviceId = ""
+        password = ""
+        hostAuthority = ""
+        authToken = ""
+        credentialKind = CredentialKind.LONG_TERM
     }
 
     fun payload(useToken: Boolean): JSONObject {

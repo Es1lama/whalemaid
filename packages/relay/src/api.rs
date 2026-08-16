@@ -104,6 +104,14 @@ fn credential_kind_name(kind: CredentialKind) -> &'static str {
     }
 }
 
+/// 宿主权威只能指向受控端本机 DSH web；拒绝把隧道变成任意 Host/Origin 转发器。
+fn valid_host_authority(value: &str) -> bool {
+    value
+        .strip_prefix("127.0.0.1:")
+        .and_then(|port| port.parse::<u16>().ok())
+        .is_some_and(|port| port > 0)
+}
+
 fn temporary_state_name(state: &TemporaryCredentialState) -> &'static str {
     match state {
         TemporaryCredentialState::None => "none",
@@ -152,8 +160,9 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
     let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let password_digest = b.get("passwordDigest").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if device_id.is_empty() || password_digest.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "deviceId/passwordDigest required" }))))
+    let host_authority = b.get("hostAuthority").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if device_id.is_empty() || password_digest.is_empty() || !valid_host_authority(&host_authority) {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "deviceId/passwordDigest/valid hostAuthority required" }))))
     }
     // 单次令牌不可浪费在注定失败的注册上：先查设备占用（409 不消耗令牌），
     // 否则宿主重试循环一次 409 就烧掉一个令牌，管理员吊销后反而无法再注册
@@ -167,7 +176,7 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
         .registry
         .lock()
         .await
-        .register(&device_id, &password_digest)
+        .register(&device_id, &password_digest, &host_authority)
         .map_err(|e| (StatusCode::CONFLICT, Json(json!({ "error": e.to_string() }))))?;
     reload_config(&s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
     Ok((StatusCode::OK, Json(json!({
@@ -189,7 +198,7 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     }
     let ip = client_ip(&s, &headers, Some(peer));
 
-    let (service, port, session_token, credential_kind, session_ttl_sec) = if !supplied_session.is_empty() {
+    let (service, port, host_authority, session_token, credential_kind, session_ttl_sec) = if !supplied_session.is_empty() {
         let key = format!("session-token:{ip}:{device_id}");
         match s.limiter.lock().await.check(&key) {
             Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "RATE_LIMITED" })))),
@@ -211,17 +220,20 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         };
         let route = if session_current {
             let reg = s.registry.lock().await;
-            let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port));
+            let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port, dev.host_authority.clone()));
             found
         } else {
             None
         };
-        let (Some((kind, remaining, _)), Some((service, port))) = (session, route) else {
+        let (Some((kind, remaining, _)), Some((service, port, host_authority))) = (session, route) else {
             s.limiter.lock().await.record_fail(&key);
             return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_SESSION" }))))
         };
+        if !valid_host_authority(&host_authority) {
+            return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "DEVICE_ROUTE_NOT_READY" }))))
+        }
         s.limiter.lock().await.record_success(&key);
-        (service, port, supplied_session, kind, remaining)
+        (service, port, host_authority, supplied_session, kind, remaining)
     } else {
         let requested_kind = match b.get("credentialKind").and_then(|v| v.as_str()).unwrap_or("longTerm") {
             "longTerm" => CredentialKind::LongTerm,
@@ -235,35 +247,38 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
             Attempt::Allowed => {}
         }
 
-        let (password_digest, service, port, temporary_generation, temporary_expires_at) = match requested_kind {
+        let (password_digest, service, port, host_authority, temporary_generation, temporary_expires_at) = match requested_kind {
             CredentialKind::LongTerm => {
                 let candidate = {
                     let reg = s.registry.lock().await;
                     let found = reg.active()
                         .find(|dev| dev.id == device_id)
-                        .map(|dev| (dev.password_digest.clone(), dev.service.clone(), dev.port));
+                        .map(|dev| (dev.password_digest.clone(), dev.service.clone(), dev.port, dev.host_authority.clone()));
                     found
                 };
-                let Some((digest, service, port)) = candidate else {
+                let Some((digest, service, port, host_authority)) = candidate else {
                     s.limiter.lock().await.record_fail(&key);
                     return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_CREDENTIAL" }))))
                 };
-                (digest, service, port, None, None)
+                (digest, service, port, host_authority, None, None)
             }
             CredentialKind::Temporary => {
                 let candidate = s.registry.lock().await.temporary_password_candidate(&device_id, now_secs())
                     .map_err(temporary_credential_error)?;
                 let route = {
                     let reg = s.registry.lock().await;
-                    let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port));
+                    let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port, dev.host_authority.clone()));
                     found
                 };
-                let Some((service, port)) = route else {
+                let Some((service, port, host_authority)) = route else {
                     return Err(temporary_credential_error(TemporaryCredentialError::UnknownDevice))
                 };
-                (candidate.digest, service, port, Some(candidate.generation), Some(candidate.expires_at))
+                (candidate.digest, service, port, host_authority, Some(candidate.generation), Some(candidate.expires_at))
             }
         };
+        if !valid_host_authority(&host_authority) {
+            return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "DEVICE_ROUTE_NOT_READY" }))))
+        }
 
         let permit = s.password_verify_slots.acquire().await.map_err(|_| (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -311,7 +326,7 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
             std::time::Duration::from_secs(session_ttl),
             temporary_generation,
         );
-        (service, port, token, requested_kind, session_ttl)
+        (service, port, host_authority, token, requested_kind, session_ttl)
     };
 
     let grant = Uuid::new_v4().simple().to_string();
@@ -319,6 +334,7 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     let tunnel_port = s.config.tunnel_listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(9443);
     Ok((StatusCode::OK, Json(json!({
         "deviceId": device_id, "service": service,
+        "hostAuthority": host_authority,
         "credentialKind": credential_kind_name(credential_kind),
         "sessionToken": session_token, "sessionTtlSec": session_ttl_sec,
         "grant": grant, "grantTtlSec": 120, "tunnelPort": tunnel_port,
@@ -400,15 +416,23 @@ async fn revoke_temporary_password(
     Ok((StatusCode::OK, Json(json!({ "state": if revoked { "revoked" } else { "unchanged" } }))))
 }
 
-/// 被控端隧道签发：凭据鉴权，返回当前隧道 token（不轮换——token 一经注册固定，SEC-003）
-async fn tunnel(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+/// 被控端隧道签发：凭据鉴权，刷新实际 DSH web 权威，返回当前隧道 token（不轮换——token 一经注册固定，SEC-003）
+async fn tunnel(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
     let authorized = { s.registry.lock().await.authenticate_credential(cred).map(|d| d.id == id).unwrap_or(false) };
     if !authorized {
         return Err(unauthorized())
     }
+    let request: Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
+    let host_authority = request.get("hostAuthority").and_then(|value| value.as_str()).unwrap_or("");
+    if !valid_host_authority(host_authority) {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "valid hostAuthority required" }))))
+    }
     let (service, port, token) = {
-        let reg = s.registry.lock().await;
+        let mut reg = s.registry.lock().await;
+        if !reg.update_host_authority(&id, host_authority) {
+            return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))
+        }
         let dev = reg.active().find(|d| d.id == id).ok_or((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))?;
         (dev.service.clone(), dev.port, dev.rathole_token.clone())
     };
@@ -588,7 +612,7 @@ mod tests {
         let mut registry = Registry::load(dir.join("devices.json"), 5202).unwrap();
         let device_id = "WHALE-TEST-TEMP".to_string();
         let (_, credential, _) = registry
-            .register(&device_id, &hash_password("LONG-PASSWORD").unwrap())
+            .register(&device_id, &hash_password("LONG-PASSWORD").unwrap(), "127.0.0.1:3182")
             .unwrap();
         let state = Arc::new(AppState {
             registry: Mutex::new(registry),
@@ -651,6 +675,7 @@ mod tests {
         ).await;
         assert_eq!(connect_status, StatusCode::OK);
         assert_eq!(connected["credentialKind"], "temporary");
+        assert_eq!(connected["hostAuthority"], "127.0.0.1:3182");
         let session_token = connected["sessionToken"].as_str().unwrap().to_string();
 
         let (second_status, second) = call(
@@ -751,5 +776,38 @@ mod tests {
         ).await;
         assert_eq!(long_status, StatusCode::OK);
         assert_eq!(long["credentialKind"], "longTerm");
+    }
+
+    #[tokio::test]
+    async fn authenticated_tunnel_refreshes_host_authority_for_next_connect() {
+        let (app, _state, device_id, credential) = test_app().await;
+        let tunnel_path = format!("/_whalemaid/devices/{device_id}/tunnel");
+        let (bad_status, _) = call(
+            &app,
+            "POST",
+            &tunnel_path,
+            json!({ "hostAuthority": "attacker.example:4444" }),
+            Some(&credential),
+        ).await;
+        assert_eq!(bad_status, StatusCode::BAD_REQUEST);
+
+        let (tunnel_status, _) = call(
+            &app,
+            "POST",
+            &tunnel_path,
+            json!({ "hostAuthority": "127.0.0.1:4199" }),
+            Some(&credential),
+        ).await;
+        assert_eq!(tunnel_status, StatusCode::OK);
+
+        let (connect_status, connected) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "password": "LONG-PASSWORD", "credentialKind": "longTerm" }),
+            None,
+        ).await;
+        assert_eq!(connect_status, StatusCode::OK);
+        assert_eq!(connected["hostAuthority"], "127.0.0.1:4199");
     }
 }

@@ -7,8 +7,6 @@ import java.io.ByteArrayOutputStream
  * 由 WhaleMaidTunnelPlugin 的本地代理调用：路由决策、请求行构造、响应解析。
  */
 object TunnelHttp {
-    /** 受控端宿主 web 权威（隧道对端；官方信任栅栏按此权威放行） */
-    const val HOST_AUTHORITY = "127.0.0.1:3181"
     const val CTRL_CONNECT_PATH = "/_ctrl/connect"
     const val CTRL_STATUS_PATH = "/_ctrl/status"
 
@@ -62,12 +60,17 @@ object TunnelHttp {
         return -1
     }
 
-    /** 浏览器请求 → 隧道内 HTTP 请求行：Host/Origin 改写宿主权威，hop 头剔除，有 body 补 content-length */
-    fun buildTunnelRequest(method: String, uri: String, headers: Map<String, String>, bodyBytes: ByteArray?): String {
+    fun isValidHostAuthority(value: String): Boolean =
+        value.removePrefix("127.0.0.1:").takeIf { value.startsWith("127.0.0.1:") }
+            ?.toIntOrNull()?.let { it in 1..65535 } == true
+
+    /** 浏览器请求 → 隧道内 HTTP 请求行：Host/Origin 改写为已认证设备报告的宿主权威，hop 头剔除，有 body 补 content-length */
+    fun buildTunnelRequest(method: String, uri: String, headers: Map<String, String>, bodyBytes: ByteArray?, hostAuthority: String): String {
+        require(isValidHostAuthority(hostAuthority)) { "invalid host authority" }
         val sb = StringBuilder()
         sb.append("$method $uri HTTP/1.1\r\n")
-        sb.append("Host: $HOST_AUTHORITY\r\n")
-        sb.append("Origin: http://$HOST_AUTHORITY\r\n")
+        sb.append("Host: $hostAuthority\r\n")
+        sb.append("Origin: http://$hostAuthority\r\n")
         for ((k, v) in headers) {
             if (k.lowercase() in setOf("host", "connection", "content-length", "origin", "upgrade", "accept-encoding")) continue
             sb.append("$k: $v\r\n")
@@ -77,10 +80,10 @@ object TunnelHttp {
         return sb.toString()
     }
 
-    /** 官方事件通道（/api/events.mux|host）的 WS upgrade 请求行——使用页面实际请求的 URI 与 Origin，不硬编码 */
-    fun buildEventsUpgradeRequest(uri: String, secWebSocketKey: String, origin: String? = null): String {
-        val originLine = if (origin.isNullOrEmpty()) "" else "Origin: $origin\r\n"
-        return "GET $uri HTTP/1.1\r\nHost: $HOST_AUTHORITY\r\n$originLine" +
+    /** 官方事件通道（/api/events.mux|host）的 WS upgrade 请求行——URI 保持不变，Host/Origin 改写为已认证宿主权威。 */
+    fun buildEventsUpgradeRequest(uri: String, secWebSocketKey: String, hostAuthority: String): String {
+        require(isValidHostAuthority(hostAuthority)) { "invalid host authority" }
+        return "GET $uri HTTP/1.1\r\nHost: $hostAuthority\r\nOrigin: http://$hostAuthority\r\n" +
             "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: $secWebSocketKey\r\nSec-WebSocket-Version: 13\r\n\r\n"
     }
 

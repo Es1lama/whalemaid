@@ -88,9 +88,11 @@ describe('RelayClient 凭据策略', () => {
       }
       if (url.endsWith('/devices') && opts.method === 'POST') {
         expect(opts.headers['x-install-code']).toBe('code-1')
+        expect(JSON.parse(opts.body ?? '{}').hostAuthority).toBe('127.0.0.1:3181')
         return okRes(200, { ...binding })
       }
       if (url.endsWith('/tunnel') && opts.headers.authorization === 'Bearer cred-new') {
+        expect(JSON.parse(opts.body ?? '{}').hostAuthority).toBe('127.0.0.1:3181')
         return okRes(200, { ...binding })
       }
       if (url.endsWith('/temporary-password') && opts.method === 'POST') {

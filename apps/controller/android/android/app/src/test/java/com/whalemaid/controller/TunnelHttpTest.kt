@@ -56,10 +56,10 @@ class TunnelHttpTest {
             "X-Custom" to "yes",
             "Content-Type" to "application/json",
         )
-        val req = TunnelHttp.buildTunnelRequest("POST", "/api/session.list", headers, "{}".toByteArray())
+        val req = TunnelHttp.buildTunnelRequest("POST", "/api/session.list", headers, "{}".toByteArray(), "127.0.0.1:3182")
         assertTrue(req.startsWith("POST /api/session.list HTTP/1.1\r\n"))
-        assertTrue(req.contains("Host: ${TunnelHttp.HOST_AUTHORITY}\r\n"))
-        assertTrue(req.contains("Origin: http://${TunnelHttp.HOST_AUTHORITY}\r\n"))
+        assertTrue(req.contains("Host: 127.0.0.1:3182\r\n"))
+        assertTrue(req.contains("Origin: http://127.0.0.1:3182\r\n"))
         assertTrue(req.contains("X-Custom: yes\r\n"))
         assertFalse(req.contains("evil.example.com"))
         assertFalse(req.contains("Upgrade: websocket"))
@@ -70,7 +70,7 @@ class TunnelHttpTest {
 
     @Test
     fun buildTunnelRequestOmitsContentLengthWithoutBody() {
-        val req = TunnelHttp.buildTunnelRequest("GET", "/", mapOf("Accept" to "*/*"), null)
+        val req = TunnelHttp.buildTunnelRequest("GET", "/", mapOf("Accept" to "*/*"), null, "127.0.0.1:3182")
         assertFalse(req.contains("content-length"))
         assertTrue(req.endsWith("Connection: close\r\n\r\n"))
     }
@@ -119,23 +119,22 @@ class TunnelHttpTest {
 
     @Test
     fun buildEventsUpgradeRequestUsesActualUri() {
-        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.host?x=1", "dGhlIHNhbXBsZSBub25jZQ==", "http://127.0.0.1:3181")
+        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.host?x=1", "dGhlIHNhbXBsZSBub25jZQ==", "127.0.0.1:3182")
         assertTrue(req.startsWith("GET /api/events.host?x=1 HTTP/1.1\r\n"))
-        assertTrue(req.contains("Host: ${TunnelHttp.HOST_AUTHORITY}\r\n"))
-        assertTrue(req.contains("Origin: http://127.0.0.1:3181\r\n"))
+        assertTrue(req.contains("Host: 127.0.0.1:3182\r\n"))
+        assertTrue(req.contains("Origin: http://127.0.0.1:3182\r\n"))
         assertTrue(req.contains("Upgrade: websocket\r\n"))
         assertTrue(req.contains("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"))
     }
 
-    @Test
-    fun buildEventsUpgradeRequestOmitsEmptyOrigin() {
-        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.mux", "", null)
-        assertFalse(req.contains("Origin:"))
+    @Test(expected = IllegalArgumentException::class)
+    fun buildEventsUpgradeRequestRejectsMissingAuthority() {
+        TunnelHttp.buildEventsUpgradeRequest("/api/events.mux", "", "")
     }
 
     @Test
     fun buildEventsUpgradeRequestSupportsMuxChannel() {
-        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.mux", "")
+        val req = TunnelHttp.buildEventsUpgradeRequest("/api/events.mux", "", "127.0.0.1:3182")
         assertTrue(req.startsWith("GET /api/events.mux HTTP/1.1\r\n"))
     }
 

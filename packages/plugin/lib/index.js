@@ -1918,7 +1918,11 @@ var RelayClient = class {
         "content-type": "application/json",
         "x-install-code": this.cfg.relayInstallCode
       },
-      body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
+      body: JSON.stringify({
+        deviceId: this.cfg.deviceId,
+        passwordDigest: phcScrypt(this.cfg.longPassword),
+        hostAuthority: `127.0.0.1:${this.cfg.pluginPort}`
+      }),
       fingerprint: this.cfg.relayFingerprint
     });
     if (res.status >= 300) {
@@ -1962,7 +1966,8 @@ var RelayClient = class {
   async establishTunnel(base, credential) {
     const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
       method: "POST",
-      headers: { authorization: `Bearer ${credential}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ hostAuthority: `127.0.0.1:${this.cfg.pluginPort}` }),
       fingerprint: this.cfg.relayFingerprint
     });
     if (res.status >= 300) throw new RelayHttpError(res.status, `\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);

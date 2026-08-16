@@ -199,7 +199,11 @@ export class RelayClient {
         'content-type': 'application/json',
         'x-install-code': this.cfg.relayInstallCode,
       },
-      body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
+      body: JSON.stringify({
+        deviceId: this.cfg.deviceId,
+        passwordDigest: phcScrypt(this.cfg.longPassword),
+        hostAuthority: `127.0.0.1:${this.cfg.pluginPort}`,
+      }),
       fingerprint: this.cfg.relayFingerprint,
     })
     if (res.status >= 300) {
@@ -247,7 +251,8 @@ export class RelayClient {
   private async establishTunnel(base: string, credential: string): Promise<RelayBinding> {
     const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${credential}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ hostAuthority: `127.0.0.1:${this.cfg.pluginPort}` }),
       fingerprint: this.cfg.relayFingerprint,
     })
     if (res.status >= 300) throw new RelayHttpError(res.status, `隧道签发失败: ${res.status} ${await res.text()}`)

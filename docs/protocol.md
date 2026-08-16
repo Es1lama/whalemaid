@@ -19,7 +19,7 @@
 ## PROTO-002 能力面（不再自研广播）
 
 - 能力 = 官方 API 面本身：会话（session.*）、工作区（workspace.*）、目录浏览（host.listDirectory/createDirectory，官方 browse seam）、附件（官方 dsh-attachment 管道）、审批（官方 permission/mux）。主控端不需要能力协商——官方前端按宿主实际插件组合自适配。
-- 官方前端同源经隧道后，请求头须以宿主权威呈现（`Host/Origin = 127.0.0.1:<web端口>`），由官方信任栅栏放行；宿主另可 `--trusted-host` 显式加白。
+- 官方前端同源经隧道后，请求头须以宿主权威呈现（`Host/Origin = 127.0.0.1:<web端口>`），由官方信任栅栏放行；宿主另可 `--trusted-host` 显式加白。该权威由受控插件按实际 `webServer.port` 注册并持续刷新，中继仅在设备认证成功后以 `hostAuthority` 返回；主控端禁止硬编码测试端口。
 
 ## PROTO-003 认证与授权（全部在中继侧）
 
@@ -62,12 +62,12 @@
 
 | 端点 | 语义 | 认证 |
 |---|---|---|
-| `POST /_whalemaid/devices` | 受控端注册（编号+密码哈希） | x-install-code（可消费安装令牌：默认单次+可选TTL，耗尽/过期 401） |
+| `POST /_whalemaid/devices` | 受控端注册（编号+密码哈希+实际宿主 `hostAuthority`） | x-install-code（可消费安装令牌：默认单次+可选TTL，耗尽/过期 401） |
 | `POST /_whalemaid/devices/:id/heartbeat` | 心跳（45s 在线窗口）+ 临时密码状态（不含明文/PHC） | 每设备凭据 |
-| `POST /_whalemaid/devices/:id/tunnel` | 隧道签发（token+serverPublicKey，不轮换） | 每设备凭据 |
+| `POST /_whalemaid/devices/:id/tunnel` | 隧道签发（token+serverPublicKey，不轮换）并刷新实际宿主 `hostAuthority` | 每设备凭据 |
 | `GET /_whalemaid/devices/:id/status` | 公开在线查询（不回路由秘密，限速） | 无 |
 | `DELETE /_whalemaid/devices/:id` | 吊销（自吊销或管理令牌） | 凭据/admin |
-| `POST /_whalemaid/connect` | 主控端连接：显式 `credentialKind` 的长期/临时密码（scrypt 验证，失败限速+锁定）或 sessionToken（至多 900s，绑定 IP+设备；临时 session 另绑定 generation）→ 一次性 grant（2min 单次消费；响应无设备 IP/端口） | 无 |
+| `POST /_whalemaid/connect` | 主控端连接：显式 `credentialKind` 的长期/临时密码（scrypt 验证，失败限速+锁定）或 sessionToken（至多 900s，绑定 IP+设备；临时 session 另绑定 generation）→ 一次性 grant（2min 单次消费）+ 已认证设备的本地 `hostAuthority`；响应不含设备公网 IP 或中继服务端口 | 无 |
 | `POST /_whalemaid/devices/:id/temporary-password` | 签发/刷新临时密码 PHC，TTL 60..86400 秒；清旧临时 session/grant | 每设备凭据 |
 | `DELETE /_whalemaid/devices/:id/temporary-password` | 撤销临时密码并清临时 session/grant | 每设备凭据 |
 | `GET /_whalemaid/tunnel-ws` | WSS 隧道入口（宽松泛洪上限 600/min/IP；grant 单次消费+TTL 防滥用，逐请求建连是合法高频） | grant |

@@ -72,6 +72,9 @@ pub struct DeviceRecord {
     pub service: String,
     /// 分配的转发端口
     pub port: u16,
+    /// 受控 DSH 官方 web 的本地权威；仅认证后的主控可取得，禁止硬编码测试端口。
+    #[serde(default)]
+    pub host_authority: String,
     pub revoked: bool,
     pub created_at: u64,
     /// 主控端成功授权次数（心跳带走清零；UX-009 受控端知情提示；内存态不落盘）
@@ -153,7 +156,7 @@ impl Registry {
     }
 
     /// 注册新设备（SEC-001/002/003）：设备编号 + 密码哈希入册，签发每设备凭据与初始隧道 token（均只回明文一次）
-    pub fn register(&mut self, device_id: &str, password_digest: &str) -> Result<(DeviceRecord, String, String)> {
+    pub fn register(&mut self, device_id: &str, password_digest: &str, host_authority: &str) -> Result<(DeviceRecord, String, String)> {
         if self.devices.iter().any(|d| d.id == device_id && !d.revoked) {
             anyhow::bail!("device-already-registered")
         }
@@ -166,6 +169,7 @@ impl Registry {
             rathole_token: tunnel_token.clone(),
             service: device_id.to_string(),
             port: self.next_port,
+            host_authority: host_authority.to_string(),
             revoked: false,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -203,6 +207,19 @@ impl Registry {
             return false;
         };
         dev.password_digest = new_password_digest.to_string();
+        let _ = self.persist();
+        true
+    }
+
+    /// 受控端每次建隧道都刷新实际 DSH web 权威，进程换端口后主控不会继续使用旧测试端口。
+    pub fn update_host_authority(&mut self, device_id: &str, host_authority: &str) -> bool {
+        let Some(dev) = self.devices.iter_mut().find(|d| d.id == device_id && !d.revoked) else {
+            return false;
+        };
+        if dev.host_authority == host_authority {
+            return true;
+        }
+        dev.host_authority = host_authority.to_string();
         let _ = self.persist();
         true
     }
@@ -390,7 +407,7 @@ mod tests {
     #[test]
     fn register_and_revoke() {
         let mut reg = temp_registry();
-        let (record, credential, token) = reg.register("whale-test-aaaa", &hash_password("pw").unwrap()).unwrap();
+        let (record, credential, token) = reg.register("whale-test-aaaa", &hash_password("pw").unwrap(), "127.0.0.1:4101").unwrap();
         assert_eq!(record.credential_digest, digest(&credential));
         assert_eq!(record.rathole_token, token);
         assert!(reg.authenticate_credential(&credential).is_some());
@@ -401,7 +418,7 @@ mod tests {
     #[test]
     fn password_matching() {
         let mut reg = temp_registry();
-        reg.register("whale-test-bbbb", &hash_password("correct").unwrap()).unwrap();
+        reg.register("whale-test-bbbb", &hash_password("correct").unwrap(), "127.0.0.1:4102").unwrap();
         assert!(reg.verify_device_password("whale-test-bbbb", "correct").is_some());
         assert!(reg.verify_device_password("whale-test-bbbb", "wrong").is_none());
         assert!(reg.verify_device_password("ghost", "correct").is_none());
@@ -419,7 +436,7 @@ mod tests {
     #[test]
     fn tunnel_token_stable_after_register() {
         let mut reg = temp_registry();
-        let (rec, _, issued) = reg.register("whale-test-cccc", &hash_password("pw").unwrap()).unwrap();
+        let (rec, _, issued) = reg.register("whale-test-cccc", &hash_password("pw").unwrap(), "127.0.0.1:4103").unwrap();
         // 再取一次（等价于心跳/连接后的状态）仍为同一 token
         let again = reg.active().find(|d| d.id == rec.id).unwrap().rathole_token.clone();
         assert_eq!(issued, again);
@@ -429,15 +446,15 @@ mod tests {
     #[test]
     fn duplicate_registration_rejected() {
         let mut reg = temp_registry();
-        reg.register("whale-test-dddd", &hash_password("pw").unwrap()).unwrap();
-        assert!(reg.register("whale-test-dddd", &hash_password("pw").unwrap()).is_err());
+        reg.register("whale-test-dddd", &hash_password("pw").unwrap(), "127.0.0.1:4104").unwrap();
+        assert!(reg.register("whale-test-dddd", &hash_password("pw").unwrap(), "127.0.0.1:4104").is_err());
     }
 
     /// 密码轮换（审计三轮#3）：旧密码立即失效、新密码可验、未知设备失败
     #[test]
     fn password_rotation_replaces_digest() {
         let mut reg = temp_registry();
-        let (rec, _, _) = reg.register("whale-test-pppp", &hash_password("old-pw").unwrap()).unwrap();
+        let (rec, _, _) = reg.register("whale-test-pppp", &hash_password("old-pw").unwrap(), "127.0.0.1:4105").unwrap();
         assert!(reg.verify_device_password("whale-test-pppp", "old-pw").is_some());
         assert!(reg.update_password(&rec.id, &hash_password("new-pw").unwrap()));
         assert!(reg.verify_device_password("whale-test-pppp", "old-pw").is_none()); // 旧密码立即失效
@@ -448,7 +465,7 @@ mod tests {
     #[test]
     fn temporary_password_is_consumed_once() {
         let mut reg = temp_registry();
-        let (rec, _, _) = reg.register("whale-test-temp", &hash_password("long-pw").unwrap()).unwrap();
+        let (rec, _, _) = reg.register("whale-test-temp", &hash_password("long-pw").unwrap(), "127.0.0.1:4106").unwrap();
         let digest = hash_password("WMT-ABCD-EFGH").unwrap();
         let issued = reg.issue_temporary_password(&rec.id, &digest, 600, 1_000).unwrap();
         assert_eq!(issued.expires_at, 1_600);
@@ -465,7 +482,7 @@ mod tests {
     #[test]
     fn temporary_password_generation_blocks_stale_verification() {
         let mut reg = temp_registry();
-        let (rec, _, _) = reg.register("whale-test-refresh", &hash_password("long-pw").unwrap()).unwrap();
+        let (rec, _, _) = reg.register("whale-test-refresh", &hash_password("long-pw").unwrap(), "127.0.0.1:4107").unwrap();
         reg.issue_temporary_password(&rec.id, &hash_password("WMT-OLD1-OLD2").unwrap(), 600, 1_000).unwrap();
         let stale = reg.temporary_password_candidate(&rec.id, 1_010).unwrap();
         let current = reg.issue_temporary_password(&rec.id, &hash_password("WMT-NEW1-NEW2").unwrap(), 600, 1_020).unwrap();
@@ -482,7 +499,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("whalemaid-relay-temp-state-{}", Uuid::new_v4()));
         let file = dir.join("devices.json");
         let mut reg = Registry::load(file.clone(), 5202).unwrap();
-        let (rec, _, _) = reg.register("whale-test-states", &hash_password("long-pw").unwrap()).unwrap();
+        let (rec, _, _) = reg.register("whale-test-states", &hash_password("long-pw").unwrap(), "127.0.0.1:4108").unwrap();
         reg.issue_temporary_password(&rec.id, &hash_password("WMT-TIME-OUT1").unwrap(), 60, 1_000).unwrap();
         assert_eq!(
             reg.temporary_password_candidate(&rec.id, 1_061),
@@ -503,15 +520,15 @@ mod tests {
     #[test]
     fn ports_are_distinct() {
         let mut reg = temp_registry();
-        let (a, _, _) = reg.register("whale-test-eeee", &hash_password("pw").unwrap()).unwrap();
-        let (b, _, _) = reg.register("whale-test-ffff", &hash_password("pw").unwrap()).unwrap();
+        let (a, _, _) = reg.register("whale-test-eeee", &hash_password("pw").unwrap(), "127.0.0.1:4109").unwrap();
+        let (b, _, _) = reg.register("whale-test-ffff", &hash_password("pw").unwrap(), "127.0.0.1:4110").unwrap();
         assert_ne!(a.port, b.port);
     }
 
     #[test]
     fn heartbeat_and_online() {
         let mut reg = temp_registry();
-        let (record, _, _) = reg.register("whale-test-gggg", &hash_password("pw").unwrap()).unwrap();
+        let (record, _, _) = reg.register("whale-test-gggg", &hash_password("pw").unwrap(), "127.0.0.1:4111").unwrap();
         assert!(!reg.online(&record.id, 45));
         assert_eq!(reg.last_seen_at(&record.id), None);
         assert!(reg.touch(&record.id));

@@ -10,7 +10,7 @@ class ControllerCredentialSessionTest {
     @Test
     fun temporaryCredentialDropsPlaintextAndUsesOnlySessionToken() {
         val session = ControllerCredentialSession()
-        session.commit("relay.test", "WHALE-A", "WMT-ABCD-EFGH", CredentialKind.TEMPORARY, "temp-token")
+        session.commit("relay.test", "WHALE-A", "WMT-ABCD-EFGH", CredentialKind.TEMPORARY, "temp-token", "127.0.0.1:3182")
 
         assertEquals("", session.password)
         assertEquals("temp-token", session.authToken)
@@ -24,12 +24,29 @@ class ControllerCredentialSessionTest {
     @Test
     fun longTermCredentialMayFallbackOnlyAfterSessionRejection() {
         val session = ControllerCredentialSession()
-        session.commit("relay.test", "WHALE-A", "LONG-PASSWORD", CredentialKind.LONG_TERM, "long-token")
+        session.commit("relay.test", "WHALE-A", "LONG-PASSWORD", CredentialKind.LONG_TERM, "long-token", "127.0.0.1:3182")
 
         assertTrue(session.canFallbackPassword(401))
         assertFalse(session.canFallbackPassword(409))
         assertEquals("longTerm", session.payload(useToken = false).getString("credentialKind"))
         assertEquals("LONG-PASSWORD", session.payload(useToken = false).getString("password"))
+    }
+
+    @Test
+    fun relayMayRefreshAuthorityWhenTheSameProfileStartsOnAnotherPort() {
+        val session = ControllerCredentialSession()
+        session.commit("relay.test", "WHALE-A", "LONG-PASSWORD", CredentialKind.LONG_TERM, "long-token", "127.0.0.1:3182")
+
+        session.updateHostAuthority("127.0.0.1:4199")
+
+        assertEquals("127.0.0.1:4199", session.hostAuthority)
+        assertTrue(session.connected)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun nonLocalHostAuthorityFailsClosed() {
+        val session = ControllerCredentialSession()
+        session.commit("relay.test", "WHALE-A", "LONG-PASSWORD", CredentialKind.LONG_TERM, "long-token", "attacker.example:4444")
     }
 
     @Test(expected = IllegalArgumentException::class)

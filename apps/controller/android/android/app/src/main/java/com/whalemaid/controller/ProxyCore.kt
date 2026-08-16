@@ -183,6 +183,7 @@ class ProxyCore(
         if (returnedKind != session.credentialKind) throw IOException("relay credentialKind changed")
         val issuedToken = json.optString("sessionToken")
         if (issuedToken.isNotEmpty()) session.authToken = issuedToken
+        session.updateHostAuthority(json.optString("hostAuthority"))
         return json.getString("grant")
     }
 
@@ -274,13 +275,16 @@ class ProxyCore(
                                 .getOrElse { return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""") }
                             if (returnedKind != credentialKind) return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
                             val authToken = auth.optString("sessionToken")
-                            if (authToken.isEmpty()) return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
-                            this@ProxyCore.session.commit(serverAddr, deviceId, password, credentialKind, authToken)
+                            val hostAuthority = auth.optString("hostAuthority")
+                            if (authToken.isEmpty() || !TunnelHttp.isValidHostAuthority(hostAuthority)) {
+                                return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
+                            }
+                            this@ProxyCore.session.commit(serverAddr, deviceId, password, credentialKind, authToken, hostAuthority)
                             jsonResponse(200, """{"ok":true,"credentialKind":"${credentialKind.wire}"}""")
                         }
                         TunnelHttp.Route.TUNNEL -> {
                             val bodyBytes = readBody(session)
-                            val head = TunnelHttp.buildTunnelRequest(method, uri, session.headers, bodyBytes)
+                            val head = TunnelHttp.buildTunnelRequest(method, uri, session.headers, bodyBytes, this@ProxyCore.session.hostAuthority)
                             val raw = tunnelExchange(head, bodyBytes)
                             val (status, respHeaders, payload0) = TunnelHttp.parseResponse(raw)
                             // 官方 HTML 注入 WebView 兼容 polyfill（老 WebView 缺 AbortSignal.any/timeout）
@@ -394,9 +398,8 @@ class ProxyCore(
                                 webSocket.send("GRANT $grant ${session.deviceId}")
                                 val hs = getHandshakeRequest()
                                 val key = hs.headers["sec-websocket-key"] ?: ""
-                                val origin = hs.headers["origin"] ?: "http://${TunnelHttp.HOST_AUTHORITY}"
-                                // 用页面实际请求的事件通道（/api/events.mux 或 /api/events.host）而非硬编码；Origin 透传（宿主 WS 信任栅栏校验）
-                                webSocket.send(TunnelHttp.buildEventsUpgradeRequest(hs.uri, key, origin))
+                                // 事件 URI 取页面实际请求；Host/Origin 必须改写为 relay 对已认证设备返回的宿主权威。
+                                webSocket.send(TunnelHttp.buildEventsUpgradeRequest(hs.uri, key, session.hostAuthority))
                                 while (true) { val f = pending.poll() ?: break; webSocket.send(okio.ByteString.of(*f)) }
                             }
                             override fun onMessage(webSocket: OkWebSocket, bytes: okio.ByteString) { feedUpstream(bytes.toByteArray()) }
