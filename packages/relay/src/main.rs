@@ -125,10 +125,21 @@ async fn main() -> Result<()> {
         }
     });
 
-    // 优雅退出：Ctrl-C 时先停 sidecar（rathole），再退
+    // 优雅退出：Ctrl-C/SIGTERM 时先停 sidecar（rathole），再退——否则孤儿 sidecar 抢占端口（实测教训）
     let state_for_signal = state.clone();
     tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
         let _ = tokio::signal::ctrl_c().await;
+        println!("[whalemaid-relay] 收到退出信号，停止 rathole sidecar…");
         state_for_signal.sidecar.lock().await.stop().await;
         std::process::exit(0);
     });

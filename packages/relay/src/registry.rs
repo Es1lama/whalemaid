@@ -132,7 +132,8 @@ impl Registry {
         self.devices.iter().find(|x| x.credential_digest == d && !x.revoked)
     }
 
-    /// SEC-002：/connect 密码校验（argon2 常数时间验证）
+    /// SEC-002：测试辅助；生产 /connect 在 blocking 池校验 scrypt，避免阻塞异步执行器。
+    #[cfg(test)]
     pub fn verify_device_password(&self, device_id: &str, password: &str) -> Option<&DeviceRecord> {
         let dev = self.devices.iter().find(|d| d.id == device_id && !d.revoked)?;
         if verify_password(password, &dev.password_digest) {
