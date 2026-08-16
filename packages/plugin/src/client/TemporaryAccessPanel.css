@@ -1,0 +1,150 @@
+.whalemaid-access-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.whalemaid-access-trigger:hover {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  color: var(--dsw-alias-label-primary);
+}
+
+.whalemaid-access-trigger:focus-visible,
+.whalemaid-access-button:focus-visible,
+.whalemaid-access-icon-button:focus-visible,
+.whalemaid-access-select:focus-visible {
+  outline: 2px solid var(--dsw-alias-label-tertiary);
+  outline-offset: 2px;
+}
+
+.whalemaid-access-trigger-label {
+  white-space: nowrap;
+}
+
+.whalemaid-access-dialog {
+  width: min(440px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  border-radius: 8px;
+}
+
+.whalemaid-access-body {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.whalemaid-access-field {
+  display: grid;
+  gap: 7px;
+}
+
+.whalemaid-access-label {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.whalemaid-access-value-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.whalemaid-access-code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+}
+
+.whalemaid-access-password {
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.whalemaid-access-status {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.whalemaid-access-error {
+  margin: 0;
+  color: var(--dsw-alias-label-error);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.whalemaid-access-select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.whalemaid-access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.whalemaid-access-button,
+.whalemaid-access-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.whalemaid-access-button {
+  padding: 0 12px;
+}
+
+.whalemaid-access-icon-button {
+  width: 34px;
+  padding: 0;
+  flex: none;
+}
+
+.whalemaid-access-button:hover:not(:disabled),
+.whalemaid-access-icon-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.whalemaid-access-button:disabled,
+.whalemaid-access-icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (max-width: 520px) {
+  .whalemaid-access-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .whalemaid-access-actions .whalemaid-access-button {
+    flex: 1 1 120px;
+  }
+}

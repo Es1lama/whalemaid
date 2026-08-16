@@ -45,7 +45,7 @@
 
 ### M1 剩余（测试 loop 继续）
 
-- ◐ REQ-003 临时密码：中继核心已实现设备凭据签发/刷新/撤销、服务端 TTL、generation 原子单次消费、临时 session 与稳定错误码（37 个 relay 单测覆盖）；受控端生成 UI、插件接线及 Web/Android/iOS 主控 UX 仍待完成，不得标 ✅；
+- ◐ REQ-003 临时密码：中继核心已实现设备凭据签发/刷新/撤销、服务端 TTL、generation 原子单次消费、临时 session 与稳定错误码；受控插件已通过官方 sidebar slot 提供设备编号、生成/刷新/复制/倒计时/撤销 UI，且终态清除明文。Web/Android/iOS 主控端 credential mode、错误语义与临时设备不落长期列表仍待完成，不得标 ✅；
 - ✅ REQ-008 permission.get/set 透传（projections 基线 + /permission 命令）；
 - ⬜ 主控端 App（ADR-039 移植前端）：官方前端独立构建 spike → Capacitor/Electron/Web 三壳 → 设备管理模块（ToDesk 式首屏）；旧自研移动 UI 已废止删除，不恢复；
 - ✅ 受控端插件（audit#3 收尾）：不自建任何 listener——隧道直指宿主原生 web 端口（官方 /api+WS+UI 唯一载体）；设备自动注册+心跳+断线重连实测；自定 RPC/网关/PWA 已全部废止删除；

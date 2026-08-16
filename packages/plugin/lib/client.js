@@ -46,6 +46,9 @@ function getNativeBridge() {
     "capturePhoto",
     "pickGallery",
     "pickFiles",
+    "startRecording",
+    "stopRecording",
+    "cancelRecording",
     "readAsset",
     "releaseAsset"
   ];
@@ -291,6 +294,224 @@ function attachmentInjected() {
   return { getBridge: getNativeBridge };
 }
 
+// src/client/TemporaryAccessPanel.tsx
+var import_react2 = require("react");
+var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
+
+// src/client/temporary-client.ts
+var HEADERS = { "x-whalemaid-client": "1" };
+async function parse(response) {
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || `\u8BF7\u6C42\u5931\u8D25 ${response.status}`);
+  return body;
+}
+async function readDeviceAccess(request = fetch) {
+  return parse(await request("/api/whalemaid/device", { headers: HEADERS }));
+}
+async function issueTemporaryPassword(ttlSec, request = fetch) {
+  return parse(await request("/api/whalemaid/temporary-password", {
+    method: "POST",
+    headers: { ...HEADERS, "content-type": "application/json" },
+    body: JSON.stringify({ ttlSec })
+  }));
+}
+async function revokeTemporaryPassword(request = fetch) {
+  return parse(await request("/api/whalemaid/temporary-password", {
+    method: "DELETE",
+    headers: HEADERS
+  }));
+}
+
+// src/client/TemporaryAccessPanel.css
+var TemporaryAccessPanel_default = ".whalemaid-access-trigger {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 8px;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  color: var(--dsw-alias-label-secondary);\n  font: inherit;\n  cursor: pointer;\n}\n\n.whalemaid-access-trigger:hover {\n  background: var(--dsw-alias-interactive-bg-hover-solid);\n  color: var(--dsw-alias-label-primary);\n}\n\n.whalemaid-access-trigger:focus-visible,\n.whalemaid-access-button:focus-visible,\n.whalemaid-access-icon-button:focus-visible,\n.whalemaid-access-select:focus-visible {\n  outline: 2px solid var(--dsw-alias-label-tertiary);\n  outline-offset: 2px;\n}\n\n.whalemaid-access-trigger-label {\n  white-space: nowrap;\n}\n\n.whalemaid-access-dialog {\n  width: min(440px, calc(100vw - 24px));\n  max-height: calc(100vh - 24px);\n  border-radius: 8px;\n}\n\n.whalemaid-access-body {\n  display: grid;\n  gap: 18px;\n  min-width: 0;\n}\n\n.whalemaid-access-field {\n  display: grid;\n  gap: 7px;\n}\n\n.whalemaid-access-label {\n  color: var(--dsw-alias-label-tertiary);\n  font-size: 12px;\n}\n\n.whalemaid-access-value-row {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n}\n\n.whalemaid-access-code {\n  min-width: 0;\n  overflow-wrap: anywhere;\n  color: var(--dsw-alias-label-primary);\n  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n  font-size: 15px;\n}\n\n.whalemaid-access-password {\n  font-size: 19px;\n  font-weight: 600;\n}\n\n.whalemaid-access-status {\n  color: var(--dsw-alias-label-tertiary);\n  font-size: 12px;\n}\n\n.whalemaid-access-error {\n  margin: 0;\n  color: var(--dsw-alias-label-error);\n  font-size: 13px;\n  overflow-wrap: anywhere;\n}\n\n.whalemaid-access-select {\n  width: 100%;\n  height: 36px;\n  padding: 0 10px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 6px;\n  background: var(--dsw-alias-bg-base);\n  color: var(--dsw-alias-label-primary);\n  font: inherit;\n}\n\n.whalemaid-access-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.whalemaid-access-button,\n.whalemaid-access-icon-button {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-height: 34px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 6px;\n  background: var(--dsw-alias-bg-base);\n  color: var(--dsw-alias-label-primary);\n  font: inherit;\n  cursor: pointer;\n}\n\n.whalemaid-access-button {\n  padding: 0 12px;\n}\n\n.whalemaid-access-icon-button {\n  width: 34px;\n  padding: 0;\n  flex: none;\n}\n\n.whalemaid-access-button:hover:not(:disabled),\n.whalemaid-access-icon-button:hover:not(:disabled) {\n  background: var(--dsw-alias-interactive-bg-hover-solid);\n}\n\n.whalemaid-access-button:disabled,\n.whalemaid-access-icon-button:disabled {\n  cursor: default;\n  opacity: 0.45;\n}\n\n@media (max-width: 520px) {\n  .whalemaid-access-dialog {\n    width: calc(100vw - 16px);\n    max-height: calc(100vh - 16px);\n  }\n\n  .whalemaid-access-actions .whalemaid-access-button {\n    flex: 1 1 120px;\n  }\n}\n";
+
+// src/client/TemporaryAccessPanel.tsx
+var import_jsx_runtime2 = require("react/jsx-runtime");
+function installStyles2() {
+  const existing = document.querySelector("style[data-whalemaid-access]");
+  if (existing !== null) return () => void 0;
+  const style = document.createElement("style");
+  style.dataset.whalemaidAccess = "";
+  style.textContent = TemporaryAccessPanel_default;
+  document.head.append(style);
+  return () => {
+    style.remove();
+  };
+}
+function stateLabel(state) {
+  switch (state) {
+    case "none":
+      return "\u5C1A\u672A\u751F\u6210";
+    case "active":
+      return "\u53EF\u4F7F\u7528\u4E00\u6B21";
+    case "consumed":
+      return "\u5DF2\u4F7F\u7528";
+    case "expired":
+      return "\u5DF2\u8FC7\u671F";
+    case "revoked":
+      return "\u5DF2\u64A4\u9500";
+  }
+}
+function remainingLabel(expiresAt, now) {
+  const seconds = Math.max(0, expiresAt - now);
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)} \u5C0F\u65F6 ${minutes % 60} \u5206`;
+  return `${minutes}:${rest.toString().padStart(2, "0")}`;
+}
+function TemporaryAccessPanel({ wide }) {
+  const [open, setOpen] = (0, import_react2.useState)(false);
+  const [view, setView] = (0, import_react2.useState)(null);
+  const [ttlSec, setTtlSec] = (0, import_react2.useState)(600);
+  const [busy, setBusy] = (0, import_react2.useState)(false);
+  const [error, setError] = (0, import_react2.useState)(null);
+  const [copied, setCopied] = (0, import_react2.useState)(null);
+  const [now, setNow] = (0, import_react2.useState)(() => Math.floor(Date.now() / 1e3));
+  (0, import_react2.useEffect)(() => installStyles2(), []);
+  (0, import_react2.useEffect)(() => {
+    if (!open) return;
+    setBusy(true);
+    setError(null);
+    void readDeviceAccess().then(setView).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => {
+      setBusy(false);
+    });
+  }, [open]);
+  (0, import_react2.useEffect)(() => {
+    if (!open || view?.temporaryPassword.state !== "active") return;
+    const timer = window.setInterval(() => {
+      setNow(Math.floor(Date.now() / 1e3));
+    }, 1e3);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [open, view?.temporaryPassword.state]);
+  const temporary = view?.temporaryPassword;
+  const remaining = (0, import_react2.useMemo)(
+    () => temporary?.state === "active" ? remainingLabel(temporary.expiresAt, now) : null,
+    [now, temporary]
+  );
+  const issue = async () => {
+    setBusy(true);
+    setError(null);
+    setCopied(null);
+    try {
+      setView(await issueTemporaryPassword(ttlSec));
+      setNow(Math.floor(Date.now() / 1e3));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const revoke = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setView(await revokeTemporaryPassword());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = async (label, value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+      window.setTimeout(() => {
+        setCopied((current) => current === label ? null : current);
+      }, 1500);
+    } catch {
+      setError("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u9009\u62E9");
+    }
+  };
+  const trigger = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+    "button",
+    {
+      type: "button",
+      className: "whalemaid-access-trigger",
+      "aria-label": "\u8FDC\u7A0B\u534F\u52A9",
+      "aria-expanded": open,
+      onClick: () => {
+        setOpen(true);
+      },
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.IconShareOutline16, { size: 16 }),
+        wide && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whalemaid-access-trigger-label", children: "\u8FDC\u7A0B\u534F\u52A9" })
+      ]
+    }
+  );
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+    wide ? trigger : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.Tooltip, { label: "\u8FDC\u7A0B\u534F\u52A9", side: "right", delayMs: 500, children: trigger }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+      import_dsh_client_ui_primitives2.Modal,
+      {
+        open,
+        onClose: () => {
+          setOpen(false);
+        },
+        title: "\u8FDC\u7A0B\u534F\u52A9",
+        closeLabel: "\u5173\u95ED",
+        description: "\u77ED\u671F\u5BC6\u7801\u4EC5\u53EF\u4F7F\u7528\u4E00\u6B21\uFF0C\u5230\u671F\u6216\u64A4\u9500\u540E\u7ACB\u5373\u5931\u6548\u3002",
+        className: "whalemaid-access-dialog",
+        children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "whalemaid-access-body", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "whalemaid-access-field", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whalemaid-access-label", children: "\u8BBE\u5907\u7F16\u53F7" }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "whalemaid-access-value-row", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whalemaid-access-code", children: view?.deviceId ?? (busy ? "\u8BFB\u53D6\u4E2D" : "-") }),
+              view?.deviceId && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.Tooltip, { label: "\u590D\u5236\u8BBE\u5907\u7F16\u53F7", side: "top", delayMs: 400, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "whalemaid-access-icon-button", "aria-label": "\u590D\u5236\u8BBE\u5907\u7F16\u53F7", onClick: () => {
+                void copy("device", view.deviceId);
+              }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.IconCopyOutline16, { size: 16 }) }) })
+            ] })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "whalemaid-access-field", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whalemaid-access-label", children: "\u6709\u6548\u671F" }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { className: "whalemaid-access-select", value: ttlSec, disabled: busy, onChange: (event) => {
+              setTtlSec(Number(event.target.value));
+            }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: 600, children: "10 \u5206\u949F" }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: 1800, children: "30 \u5206\u949F" }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: 3600, children: "1 \u5C0F\u65F6" }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: 14400, children: "4 \u5C0F\u65F6" })
+            ] })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "whalemaid-access-field", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whalemaid-access-label", children: "\u77ED\u671F\u5BC6\u7801" }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "whalemaid-access-value-row", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whalemaid-access-code whalemaid-access-password", children: temporary?.password || stateLabel(temporary?.state ?? "none") }),
+              temporary?.password && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.Tooltip, { label: "\u590D\u5236\u77ED\u671F\u5BC6\u7801", side: "top", delayMs: 400, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "whalemaid-access-icon-button", "aria-label": "\u590D\u5236\u77ED\u671F\u5BC6\u7801", onClick: () => {
+                void copy("password", temporary.password);
+              }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.IconCopyOutline16, { size: 16 }) }) })
+            ] }),
+            temporary && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "whalemaid-access-status", role: "status", children: [
+              stateLabel(temporary.state),
+              remaining !== null ? `\uFF0C\u5269\u4F59 ${remaining}` : "",
+              copied !== null ? "\uFF0C\u5DF2\u590D\u5236" : ""
+            ] })
+          ] }),
+          error !== null && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "whalemaid-access-error", role: "alert", children: error }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "whalemaid-access-actions", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "whalemaid-access-button", disabled: busy, onClick: () => {
+              void issue();
+            }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.IconRefreshOutline16, { size: 16 }),
+              temporary?.state === "active" ? "\u5237\u65B0\u5BC6\u7801" : "\u751F\u6210\u5BC6\u7801"
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "whalemaid-access-button", disabled: busy || temporary?.state !== "active", onClick: () => {
+              void revoke();
+            }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives2.IconTrashOutline16, { size: 16 }),
+              "\u64A4\u9500"
+            ] })
+          ] })
+        ] })
+      }
+    )
+  ] });
+}
+
 // src/client/index.ts
 var inject = ["slots"];
 function apply(ctx) {
@@ -300,6 +521,11 @@ function apply(ctx) {
     order: 10,
     inject: attachmentInjected
   }, AttachmentButton));
+  ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
+    name: "sidebar.footer.action",
+    id: "whalemaid-temporary-access",
+    order: 20
+  }, TemporaryAccessPanel));
 }
 
     return module.exports;
