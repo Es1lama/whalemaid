@@ -1,0 +1,84 @@
+.whalemaid-attachment-root {
+  position: relative;
+  flex: none;
+}
+
+.whalemaid-attachment-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-specific-selector);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.whalemaid-attachment-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.whalemaid-attachment-button:focus-visible,
+.whalemaid-attachment-option:focus-visible {
+  outline: 2px solid var(--dsw-alias-label-tertiary);
+  outline-offset: 2px;
+}
+
+.whalemaid-attachment-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.whalemaid-attachment-menu {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  min-width: 112px;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 8px;
+  background: var(--dsw-specific-tip);
+}
+
+.whalemaid-attachment-option {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.whalemaid-attachment-option:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.whalemaid-attachment-option:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.whalemaid-attachment-error {
+  position: absolute;
+  z-index: 21;
+  bottom: calc(100% + 8px);
+  left: 0;
+  max-width: min(260px, 70vw);
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-specific-tip);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+}
