@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { MAX_NATIVE_CHUNK_BYTES, readNativeAsset, readNativeAssets, type NativeAsset, type WhaleMaidNativeBridge } from './native.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MAX_NATIVE_CHUNK_BYTES, readNativeAsset, readNativeAssets, writeClipboardText, type NativeAsset, type WhaleMaidNativeBridge } from './native.ts'
 
 function encoded(bytes: Uint8Array): string {
   let binary = ''
@@ -29,6 +29,36 @@ function bridgeFor(bytesById: Record<string, Uint8Array>): WhaleMaidNativeBridge
 function asset(id: string, size: number, name = `${id}.png`): NativeAsset {
   return { id, size, name, mimeType: 'image/png' }
 }
+
+afterEach(() => { vi.unstubAllGlobals() })
+
+describe('clipboard write fallback', () => {
+  it('uses the browser clipboard when the origin permits it', async () => {
+    const writeText = vi.fn(async () => undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    await writeClipboardText('share-value')
+
+    expect(writeText).toHaveBeenCalledWith('share-value')
+  })
+
+  it('uses the Capacitor bridge when the local WebView blocks browser clipboard access', async () => {
+    const copyText = vi.fn(async () => undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => { throw new Error('not allowed') }) } })
+    vi.stubGlobal('Capacitor', { Plugins: { WhaleMaidNative: { copyText } } })
+
+    await writeClipboardText('temporary-password')
+
+    expect(copyText).toHaveBeenCalledWith({ text: 'temporary-password' })
+  })
+
+  it('fails closed when neither clipboard implementation is available', async () => {
+    vi.stubGlobal('navigator', {})
+    vi.stubGlobal('Capacitor', {})
+
+    await expect(writeClipboardText('share-value')).rejects.toThrow('CLIPBOARD_UNAVAILABLE')
+  })
+})
 
 describe('native asset reconstruction', () => {
   it('reads bounded chunks into a File and releases the native asset', async () => {

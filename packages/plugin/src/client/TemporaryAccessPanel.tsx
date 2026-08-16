@@ -17,6 +17,7 @@ import {
   type TemporaryPasswordState,
 } from './temporary-client.ts'
 import stylesheet from './TemporaryAccessPanel.css'
+import { writeClipboardText } from './native.ts'
 
 type TemporaryAccessPanelProps = PropsRuntime<'sidebar.footer.action'>
 
@@ -104,7 +105,7 @@ export function TemporaryAccessPanel({ wide }: TemporaryAccessPanelProps) {
   }
   const copy = async (label: string, value: string): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(value)
+      await writeClipboardText(value)
       setCopied(label)
       window.setTimeout(() => { setCopied(current => current === label ? null : current) }, 1500)
     } catch {

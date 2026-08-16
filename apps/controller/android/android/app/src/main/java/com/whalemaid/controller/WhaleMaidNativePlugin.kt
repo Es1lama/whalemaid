@@ -3,6 +3,8 @@ package com.whalemaid.controller
 import android.Manifest
 import android.app.Activity
 import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
@@ -85,6 +87,20 @@ class WhaleMaidNativePlugin : Plugin() {
             put("maxChunkBytes", MAX_CHUNK_BYTES)
             put("maxAssetBytes", MAX_ASSET_BYTES)
         })
+    }
+
+    @PluginMethod
+    fun copyText(call: PluginCall) {
+        val text = call.getString("text") ?: run {
+            call.reject("TEXT_REQUIRED")
+            return
+        }
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: run {
+            call.reject("CLIPBOARD_UNAVAILABLE")
+            return
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("WhaleMaid", text))
+        call.resolve()
     }
 
     @PluginMethod

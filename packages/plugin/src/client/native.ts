@@ -35,6 +35,7 @@ export interface WhaleMaidNativeBridge {
   cancelRecording(options: { readonly handle: string }): Promise<void>
   readAsset(options: { readonly id: string; readonly offset: number; readonly length: number }): Promise<NativeChunkResponse>
   releaseAsset(options: { readonly id: string }): Promise<void>
+  copyText?(options: { readonly text: string }): Promise<void>
 }
 
 interface CapacitorGlobal {
@@ -54,6 +55,19 @@ export function getNativeBridge(): WhaleMaidNativeBridge | null {
   ]
   if (methods.some(method => typeof candidate[method] !== 'function')) return null
   return candidate as WhaleMaidNativeBridge
+}
+
+/** Write user-requested share text through the browser clipboard or native fallback. */
+export async function writeClipboardText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return
+  } catch {
+    const capacitor = (globalThis as typeof globalThis & { Capacitor?: CapacitorGlobal }).Capacitor
+    const nativeBridge = capacitor?.Plugins?.WhaleMaidNative
+    if (typeof nativeBridge?.copyText !== 'function') throw new Error('CLIPBOARD_UNAVAILABLE')
+    await nativeBridge.copyText({ text })
+  }
 }
 
 function checkedAsset(value: NativeAsset | undefined): NativeAsset {

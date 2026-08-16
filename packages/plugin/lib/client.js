@@ -55,6 +55,17 @@ function getNativeBridge() {
   if (methods.some((method) => typeof candidate[method] !== "function")) return null;
   return candidate;
 }
+async function writeClipboardText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    const capacitor = globalThis.Capacitor;
+    const nativeBridge = capacitor?.Plugins?.WhaleMaidNative;
+    if (typeof nativeBridge?.copyText !== "function") throw new Error("CLIPBOARD_UNAVAILABLE");
+    await nativeBridge.copyText({ text });
+  }
+}
 function checkedAsset(value) {
   if (value === void 0 || typeof value.id !== "string" || value.id === "" || typeof value.name !== "string" || typeof value.mimeType !== "string" || !Number.isSafeInteger(value.size) || value.size <= 0 || value.size > MAX_NATIVE_ASSET_BYTES) {
     throw new Error("ASSET_UNREADABLE");
@@ -418,7 +429,7 @@ function TemporaryAccessPanel({ wide }) {
   };
   const copy = async (label, value) => {
     try {
-      await navigator.clipboard.writeText(value);
+      await writeClipboardText(value);
       setCopied(label);
       window.setTimeout(() => {
         setCopied((current) => current === label ? null : current);
