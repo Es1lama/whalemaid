@@ -45,10 +45,6 @@ interface PinStore {
 class ProxyCore(
     private val pinStore: PinStore,
     private val pageHtml: () -> String,
-    initialServer: String = "",
-    initialDeviceId: String = "",
-    initialPassword: String = "",
-    private val onAuthenticated: (server: String, deviceId: String, password: String) -> Unit = { _, _, _ -> },
 ) {
     companion object {
         const val MAX_BODY = 64L * 1024 * 1024
@@ -89,13 +85,7 @@ class ProxyCore(
         """.trimIndent()
     }
 
-    class Session(
-        @Volatile var server: String = "",
-        @Volatile var deviceId: String = "",
-        @Volatile var password: String = "",
-        @Volatile var authToken: String = "",
-    )
-    val session = Session(initialServer, initialDeviceId, initialPassword)
+    val session = ControllerCredentialSession()
 
     private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -173,22 +163,24 @@ class ProxyCore(
         return (text.substring(0, insertAt) + POLYFILL_SCRIPT + text.substring(insertAt)).toByteArray(Charsets.UTF_8)
     }
 
-    /** 首次以密码认证，之后只在当前进程内复用短期 sessionToken；令牌过期时自动回退一次密码。 */
+    /** 每次代理请求以进程内 sessionToken 换 grant；只有长期凭据可在 token 401 后回退一次明文。 */
     fun requestGrant(): String {
-        fun exchange(useToken: Boolean): Pair<Int, String> {
-            val payload = JSONObject().put("deviceId", session.deviceId)
-            if (useToken) payload.put("sessionToken", session.authToken) else payload.put("password", session.password)
-            return relayRequest(session.server, "/_whalemaid/connect", "POST", payload.toString())
-        }
-        val usedToken = session.authToken.isNotEmpty()
-        var response = exchange(usedToken)
-        if (usedToken && response.first == 401) {
+        fun exchange(useToken: Boolean): Pair<Int, String> = relayRequest(
+            session.server,
+            "/_whalemaid/connect",
+            "POST",
+            session.payload(useToken).toString(),
+        )
+        var response = exchange(useToken = true)
+        if (session.canFallbackPassword(response.first)) {
             session.authToken = ""
-            response = exchange(false)
+            response = exchange(useToken = false)
         }
         val (code, body) = response
         if (code != 200) throw IOException("connect $code: $body")
         val json = JSONObject(body)
+        val returnedKind = CredentialKind.fromWire(json.optString("credentialKind"))
+        if (returnedKind != session.credentialKind) throw IOException("relay credentialKind changed")
         val issuedToken = json.optString("sessionToken")
         if (issuedToken.isNotEmpty()) session.authToken = issuedToken
         return json.getString("grant")
@@ -241,7 +233,7 @@ class ProxyCore(
                 return try {
                     val uri = session.uri
                     val method = session.method?.name ?: "GET"
-                    when (TunnelHttp.route(uri, method, this@ProxyCore.session.server.isNotEmpty())) {
+                    when (TunnelHttp.route(uri, method, this@ProxyCore.session.connected)) {
                         TunnelHttp.Route.MANAGEMENT -> {
                             NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/html; charset=utf-8", pageHtml())
                         }
@@ -261,23 +253,30 @@ class ProxyCore(
                             val bodyBytes = readBody(session) ?: ByteArray(0)
                             val json = JSONObject(String(bodyBytes, Charsets.UTF_8))
                             val serverAddr = json.optString("server").removePrefix("https://").removePrefix("http://").trimEnd('/')
-                            val deviceId = json.optString("deviceId")
+                            val deviceId = json.optString("deviceId").uppercase()
                             val password = json.optString("password")
-                            if (serverAddr.isEmpty() || deviceId.isEmpty() || password.isEmpty()) return jsonResponse(400, """{"error":"server/deviceId/password 必填"}""")
-                            this@ProxyCore.session.server = serverAddr
-                            this@ProxyCore.session.deviceId = deviceId
-                            this@ProxyCore.session.password = password
+                            val credentialKind = runCatching { CredentialKind.fromWire(json.optString("credentialKind")) }
+                                .getOrElse { return jsonResponse(400, """{"error":"credentialKind must be longTerm or temporary"}""") }
+                            if (serverAddr.isEmpty() || deviceId.isEmpty() || password.isEmpty()) return jsonResponse(400, """{"error":"server/deviceId/password/credentialKind 必填"}""")
                             val (code, respBody) = relayRequest(serverAddr, "/_whalemaid/devices/$deviceId/status")
                             if (code != 200) return jsonResponse(502, """{"error":"服务端不可达: $code"}""")
                             val st = JSONObject(respBody)
-                            if (!st.optBoolean("registered")) return jsonResponse(404, """{"error":"设备编号不存在"}""")
-                            if (!st.optBoolean("online")) return jsonResponse(503, """{"error":"设备不在线（受控端未开启或已离线）"}""")
-                            val authPayload = JSONObject().put("deviceId", deviceId).put("password", password)
+                            if (!st.optBoolean("registered")) return jsonResponse(404, """{"error":"DEVICE_NOT_FOUND"}""")
+                            if (!st.optBoolean("online")) return jsonResponse(503, """{"error":"DEVICE_OFFLINE"}""")
+                            val authPayload = JSONObject()
+                                .put("deviceId", deviceId)
+                                .put("password", password)
+                                .put("credentialKind", credentialKind.wire)
                             val (authCode, authBody) = relayRequest(serverAddr, "/_whalemaid/connect", "POST", authPayload.toString())
-                            if (authCode != 200) return jsonResponse(401, """{"error":"密码错误"}""")
-                            this@ProxyCore.session.authToken = JSONObject(authBody).optString("sessionToken")
-                            onAuthenticated(serverAddr, deviceId, password)
-                            jsonResponse(200, """{"ok":true}""")
+                            if (authCode != 200) return jsonResponse(authCode, authBody)
+                            val auth = JSONObject(authBody)
+                            val returnedKind = runCatching { CredentialKind.fromWire(auth.optString("credentialKind")) }
+                                .getOrElse { return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""") }
+                            if (returnedKind != credentialKind) return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
+                            val authToken = auth.optString("sessionToken")
+                            if (authToken.isEmpty()) return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
+                            this@ProxyCore.session.commit(serverAddr, deviceId, password, credentialKind, authToken)
+                            jsonResponse(200, """{"ok":true,"credentialKind":"${credentialKind.wire}"}""")
                         }
                         TunnelHttp.Route.TUNNEL -> {
                             val bodyBytes = readBody(session)

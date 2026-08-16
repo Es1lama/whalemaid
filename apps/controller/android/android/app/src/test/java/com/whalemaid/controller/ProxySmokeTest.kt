@@ -51,7 +51,7 @@ class ProxySmokeTest {
                 results += if (c1 == 200 && b1.contains("WM-MGMT-PAGE")) "PASS 管理页" else "FAIL 管理页 $c1 ${b1.take(60)}"
 
                 // 2. 连接
-                val (c2, b2) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"W4saWTTZM4Mr"}""")
+                val (c2, b2) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"W4saWTTZM4Mr","credentialKind":"longTerm"}""")
                 results += if (c2 == 200 && b2.contains("ok") && core.session.authToken.isNotEmpty()) "PASS connect + sessionToken" else "FAIL connect $c2 token=${core.session.authToken.isNotEmpty()} $b2"
 
                 // 3. 已连接 GET / → 隧道官方 UI（含 WebView 兼容 polyfill 注入）
@@ -101,7 +101,7 @@ class ProxySmokeTest {
                 }
 
                 // 5. 错误密码路径（同类全查：错误文案不崩）
-                val (c5, b5) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"WRONG"}""")
+                val (c5, b5) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"WRONG","credentialKind":"longTerm"}""")
                 results += if (c5 == 401) "PASS 错密401" else "FAIL 错密 $c5 $b5"
 
                 // 6. 事件 WS 桥：/api/events.mux upgrade → 隧道 → 宿主官方事件通道（官方前端靠它接收 turn/message 流）

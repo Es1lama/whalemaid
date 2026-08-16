@@ -36,12 +36,8 @@ fun startWhaleMaidCore(
     onReady: (Int) -> Unit,
 ) {
     val prefs = context.getSharedPreferences("whalemaid-tunnel", Context.MODE_PRIVATE)
-    val state = context.getSharedPreferences("whalemaid-state", Context.MODE_PRIVATE)
-    val savedServer = state.getString("server", "") ?: ""
-    val savedDeviceId = state.getString("deviceId", "") ?: ""
-    val savedPassword = state.getString("password", "") ?: ""
-    // A partial native record must never make GET / enter the tunnel with empty credentials.
-    val remembered = savedServer.isNotEmpty() && savedDeviceId.isNotEmpty() && savedPassword.isNotEmpty()
+    // 只持久化 relay 证书 pin；设备密码与 sessionToken 均只驻留当前 ProxyCore 进程。
+    context.getSharedPreferences("whalemaid-state", Context.MODE_PRIVATE).edit().clear().apply()
     val core = ProxyCore(
         pinStore = object : PinStore {
             override fun get(key: String): String? = prefs.getString(key, null)
@@ -50,16 +46,6 @@ fun startWhaleMaidCore(
         pageHtml = {
             runCatching { activity?.assets?.open("public/index.html")?.use { String(it.readBytes()) } }
                 .getOrNull() ?: "<html><body>WhaleMaid</body></html>"
-        },
-        initialServer = if (remembered) savedServer else "",
-        initialDeviceId = if (remembered) savedDeviceId else "",
-        initialPassword = if (remembered) savedPassword else "",
-        onAuthenticated = { server, deviceId, password ->
-            check(state.edit()
-                .putString("server", server)
-                .putString("deviceId", deviceId)
-                .putString("password", password)
-                .commit()) { "无法保存登录状态" }
         },
     )
     core.start(fallbackToRandomPort) { port ->

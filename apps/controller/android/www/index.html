@@ -6,6 +6,9 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:#8b93a1;font-size:13px;margin:0 0 20
 label{display:block;font-size:13px;color:#9aa3b2;margin:14px 0 6px}
 input{width:100%;box-sizing:border-box;background:#0f1115;border:1px solid #2c313d;color:#e6e8eb;border-radius:8px;padding:11px 12px;font-size:15px}
 input:focus{outline:none;border-color:#4c7dff}
+.mode{display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:3px;border:1px solid #2c313d;border-radius:8px;background:#0f1115}
+.mode label{margin:0;cursor:pointer}.mode input{position:absolute;opacity:0;pointer-events:none}.mode span{display:block;padding:8px;text-align:center;border-radius:5px;color:#9aa3b2}
+.mode input:checked+span{background:#2c313d;color:#e6e8eb}.mode input:focus-visible+span{outline:2px solid #8b93a1;outline-offset:1px}
 button{width:100%;margin-top:22px;background:#4c7dff;border:0;color:#fff;border-radius:8px;padding:12px;font-size:15px;cursor:pointer}
 button:disabled{opacity:.5}
 #status{margin-top:14px;font-size:13px;color:#8b93a1;min-height:18px;word-break:break-all}
@@ -18,6 +21,9 @@ button:disabled{opacity:.5}
 .sec b{color:#8b93a1}
 </style></head><body><div class="card"><h1>WhaleMaid</h1><p class="sub">远程控制 · 设备编号 + 密码（无 IP）</p>
 <label>服务端地址（仅首次）</label><input id="server" placeholder="relay.example.com" autocomplete="off">
+<label>连接方式</label><div class="mode" role="radiogroup" aria-label="连接方式">
+<label><input type="radio" name="kind" value="longTerm" checked><span>长期密码</span></label>
+<label><input type="radio" name="kind" value="temporary"><span>短期密码</span></label></div>
 <label>设备编号<span id="devbadge"></span></label><input id="device" placeholder="WHALE-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
 <label>设备密码</label><input id="pw" type="password" placeholder="长期密码" autocomplete="off">
 <button id="go">连接</button><div id="status"></div>
@@ -25,15 +31,17 @@ button:disabled{opacity:.5}
 连接 = 对受控电脑的完整远程控制，等同你坐在电脑前。</div></div>
 <script>
 const $ = (id) => document.getElementById(id)
-const native = window.Capacitor && window.Capacitor.Plugins ? window.Capacitor.Plugins.WhaleMaidTunnel : null
-async function savedState() {
-  if (!native || !native.loadState) return {}
-  try { const r = await native.loadState(); return r || {} } catch (e) { return {} }
+const errors = {
+  DEVICE_NOT_FOUND: '设备编号不存在', DEVICE_OFFLINE: '设备不在线', INVALID_CREDENTIAL: '密码错误',
+  CREDENTIAL_EXPIRED: '短期密码已过期', CREDENTIAL_CONSUMED: '短期密码已使用', CREDENTIAL_REVOKED: '短期密码已撤销',
+  RATE_LIMITED: '尝试过多，请稍后再试', LOCKED: '密码已暂时锁定，请稍后再试', INVALID_SESSION: '连接授权已失效，请重新连接'
 }
-async function persistState(server, device, pw) {
-  if (native && native.saveState) { try { await native.saveState({ server, deviceId: device, password: pw }) } catch (e) {} }
-  try { localStorage.setItem('whalemaid-controller', JSON.stringify({ server, device })) } catch (e) {}
+function persistState(server, device, credentialKind) {
+  try { localStorage.setItem('whalemaid-controller', JSON.stringify(credentialKind === 'longTerm' ? { server, device } : { server })) } catch (e) {}
 }
+for (const radio of document.querySelectorAll('input[name="kind"]')) radio.addEventListener('change', () => {
+  if (radio.checked) $('pw').placeholder = radio.value === 'temporary' ? '短期密码' : '长期密码'
+})
 // UX-013：连接前在线状态徽章（设备编号输入即查，防盲试）
 let statusTimer = null
 async function refreshBadge() {
@@ -51,29 +59,24 @@ async function refreshBadge() {
 }
 $('device').addEventListener('input', () => { clearTimeout(statusTimer); statusTimer = setTimeout(refreshBadge, 500) })
 $('server').addEventListener('input', () => { clearTimeout(statusTimer); statusTimer = setTimeout(refreshBadge, 500) })
-async function tryConnect(server, device, pw, auto) {
-  const st = $('status'); st.className = ''; st.textContent = auto ? '正在自动连接上次设备…' : '正在连接…'; $('go').disabled = true
+async function tryConnect(server, device, pw, credentialKind) {
+  const st = $('status'); st.className = ''; st.textContent = '正在连接…'; $('go').disabled = true
   try {
     const res = await fetch('/_ctrl/connect', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ server, deviceId: device, password: pw }) })
+      body: JSON.stringify({ server, deviceId: device, password: pw, credentialKind }) })
     const data = await res.json()
-    if (!res.ok) { st.className = 'err'; st.textContent = data.error ?? ('失败 ' + res.status); $('go').disabled = false; return false }
-    await persistState(server, device, pw)
+    if (!res.ok) { st.className = 'err'; st.textContent = errors[data.error] ?? data.error ?? ('失败 ' + res.status); $('go').disabled = false; return false }
+    persistState(server, device, credentialKind)
     st.textContent = '已连接，正在载入官方界面…'
     location.href = '/'
     return true
   } catch (e) { st.className = 'err'; st.textContent = String(e); $('go').disabled = false; return false }
 }
 $('go').onclick = () => {
-  tryConnect($('server').value.trim(), $('device').value.trim().toUpperCase(), $('pw').value, false)
+  const credentialKind = document.querySelector('input[name="kind"]:checked').value
+  void tryConnect($('server').value.trim(), $('device').value.trim().toUpperCase(), $('pw').value, credentialKind)
 }
-;(async () => {
-  const s = await savedState()
-  if (s.server && s.deviceId && s.password) {
-    $('server').value = s.server; $('device').value = s.deviceId; $('pw').value = s.password
-    tryConnect(s.server, s.deviceId, s.password, true)
-    return
-  }
+;(() => {
   const saved = JSON.parse(localStorage.getItem('whalemaid-controller') ?? '{}')
   $('server').value = saved.server ?? ''
   $('device').value = saved.device ?? ''

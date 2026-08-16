@@ -47,11 +47,11 @@ jobs:
       - name: cap sync android（生成 cordova.variables.gradle/web 资源，模板 gitignore 未入库）
         working-directory: apps/controller/android
         run: npx cap sync android
-      - name: gradle assembleDebug（剔除本机代理配置，CI 直连下载依赖）
+      - name: gradle unit tests + assembleDebug（剔除本机代理配置，CI 直连下载依赖）
         working-directory: apps/controller/android/android
         run: |
           sed -i '/systemProp.*proxy/d' gradle.properties
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew testDebugUnitTest assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: whalemaid-controller-apk
