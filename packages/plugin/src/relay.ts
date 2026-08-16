@@ -49,6 +49,20 @@ interface HttpsResponse {
   text(): Promise<string>
 }
 
+/** HTTP 状态错误：只有中继「明确拒绝凭据」的状态（401/403/404）才允许清空已保存凭据；
+ *  网络瞬断/5xx/限流属于链路问题，清凭据会导致重注册撞 device-already-registered（409）而永久离线 */
+export class RelayHttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+    this.name = 'RelayHttpError'
+  }
+}
+
+/** 凭据失效状态集（中继明确表示不认识此凭据/设备） */
+const CREDENTIAL_REJECTED = [401, 403, 404]
+
+type RequestFn = (url: string, options: { method: string; headers: Record<string, string>; body?: string; fingerprint: string }) => Promise<HttpsResponse>
+
 /** SEC-001：固定指纹的 HTTPS 请求。
  * 刻意 rejectUnauthorized:false——CA 链校验被"证书 SHA-256 指纹固定"替代（SSH TOFU 模型）；
  * 指纹不匹配立即断连，故不因跳过 CA 校验而降低安全性。 */
@@ -86,7 +100,7 @@ export class RelayClient {
   private child: ChildProcess | null = null
   private timer: NodeJS.Timeout | undefined
 
-  constructor(private cfg: RelayClientConfig, private log: (msg: string) => void) {}
+  constructor(private cfg: RelayClientConfig, private log: (msg: string) => void, private req: RequestFn = pinnedRequest) {}
 
   /** 密码轮换（审计三轮#3）：凭据鉴权调 /password 端点原子替换 PHC——旧密码立即失效，凭据不丢、隧道不断；
    *  端点不可用（旧版中继）时退回：自吊销 + 重新注册（旧密码随之失效） */
@@ -96,7 +110,7 @@ export class RelayClient {
       this.log('[whalemaid] 无中继凭据，跳过在线轮换（下次注册用新密码）')
       return
     }
-    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/password`, {
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/password`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.cfg.savedCredential}` },
       body: JSON.stringify({ passwordDigest: phcScrypt(newPassword) }),
@@ -107,7 +121,7 @@ export class RelayClient {
       return
     }
     this.log(`[whalemaid] /password 端点不可用（${res.status}），退回自吊销+重注册`)
-    await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}`, {
+    await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${this.cfg.savedCredential}` },
       fingerprint: this.cfg.relayFingerprint,
@@ -119,18 +133,24 @@ export class RelayClient {
     const base = this.cfg.relayUrl.replace(/\/$/, '')
     let credential = this.cfg.savedCredential
     if (credential) {
-      // 凭据复用：先试隧道；401/403 = 该中继不认识此凭据（换中继/清档）→ 清空重注册
+      // 凭据复用：先试隧道；仅 401/403/404（中继明确拒绝凭据）才清空重注册——
+      // 网络瞬断/5xx/限流必须保留凭据重试，否则清凭据后重注册必撞 409 device-already-registered，设备将永久离线
       try {
         const binding = await this.establishTunnel(base, credential)
         this.startHeartbeat(base, credential)
         return binding
       } catch (e) {
-        this.log(`[whalemaid] 凭据失效（${e instanceof Error ? e.message.slice(0, 60) : String(e)}），重新注册`)
-        this.cfg.onCredential('')
-        credential = ''
+        if (e instanceof RelayHttpError && CREDENTIAL_REJECTED.includes(e.status)) {
+          this.log(`[whalemaid] 凭据失效（${e.message}），重新注册`)
+          this.cfg.onCredential('')
+          credential = ''
+        } else {
+          this.log(`[whalemaid] 隧道建立暂失败（${e instanceof Error ? e.message.slice(0, 80) : String(e)}），保留凭据退避重试`)
+          throw e
+        }
       }
     }
-    const res = await pinnedRequest(`${base}/_whalemaid/devices`, {
+    const res = await this.req(`${base}/_whalemaid/devices`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -139,7 +159,16 @@ export class RelayClient {
       body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
       fingerprint: this.cfg.relayFingerprint,
     })
-    if (res.status >= 300) throw new Error(`注册失败: ${res.status} ${await res.text()}`)
+    if (res.status >= 300) {
+      const text = await res.text()
+      if (res.status === 409 && text.includes('device-already-registered')) {
+        throw new Error(`注册被拒 409 device-already-registered：该设备编号已在中继登记，但本机已保存凭据丢失——需服务端管理员吊销旧设备记录（DELETE /_whalemaid/devices/${this.cfg.deviceId} + Bearer 管理员令牌）后本插件会自动重试成功，无需重启宿主（docs/deploy-server.md）`)
+      }
+      if (res.status === 401) {
+        throw new Error('注册失败 401：安装码无效或已被消耗（单次令牌）——需管理员重发安装码并更新宿主配置 relayInstallCode 后重启宿主（docs/deploy-server.md）')
+      }
+      throw new RelayHttpError(res.status, `注册失败: ${res.status} ${text}`)
+    }
     const reg = (await res.json()) as unknown as RelayBinding
     credential = reg.credential
     this.cfg.onCredential(credential)
@@ -150,7 +179,7 @@ export class RelayClient {
 
   private startHeartbeat(base: string, credential: string): void {
     this.timer = setInterval(() => {
-      pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/heartbeat`, {
+      this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/heartbeat`, {
         method: 'POST',
         headers: { authorization: `Bearer ${credential}` },
         fingerprint: this.cfg.relayFingerprint,
@@ -172,12 +201,12 @@ export class RelayClient {
   }
 
   private async establishTunnel(base: string, credential: string): Promise<RelayBinding> {
-    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
       method: 'POST',
       headers: { authorization: `Bearer ${credential}` },
       fingerprint: this.cfg.relayFingerprint,
     })
-    if (res.status >= 300) throw new Error(`隧道签发失败: ${res.status} ${await res.text()}`)
+    if (res.status >= 300) throw new RelayHttpError(res.status, `隧道签发失败: ${res.status} ${await res.text()}`)
     const binding = (await res.json()) as unknown as RelayBinding
     // SEC-003（同类全查：与 relayFingerprint 同等级别）——服务端未返回 noise 公钥 = 拒绝建隧道（无 pin = 防不了中间人）
     if (!binding.serverPublicKey) {

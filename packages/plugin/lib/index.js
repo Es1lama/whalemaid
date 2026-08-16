@@ -93,6 +93,14 @@ function phcScrypt(password, salt = randomBytes3(16)) {
   const b64 = (b) => b.toString("base64").replace(/=+$/, "");
   return `$scrypt$ln=14,r=8,p=1$${b64(salt)}$${b64(hash)}`;
 }
+var RelayHttpError = class extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "RelayHttpError";
+  }
+};
+var CREDENTIAL_REJECTED = [401, 403, 404];
 function pinnedRequest(url, options) {
   return new Promise((resolve, reject) => {
     const req = https.request(url, { method: options.method, headers: options.headers, rejectUnauthorized: false }, (res) => {
@@ -123,9 +131,10 @@ function pinnedRequest(url, options) {
   });
 }
 var RelayClient = class {
-  constructor(cfg, log) {
+  constructor(cfg, log, req = pinnedRequest) {
     this.cfg = cfg;
     this.log = log;
+    this.req = req;
   }
   child = null;
   timer;
@@ -137,7 +146,7 @@ var RelayClient = class {
       this.log("[whalemaid] \u65E0\u4E2D\u7EE7\u51ED\u636E\uFF0C\u8DF3\u8FC7\u5728\u7EBF\u8F6E\u6362\uFF08\u4E0B\u6B21\u6CE8\u518C\u7528\u65B0\u5BC6\u7801\uFF09");
       return;
     }
-    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/password`, {
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/password`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.cfg.savedCredential}` },
       body: JSON.stringify({ passwordDigest: phcScrypt(newPassword) }),
@@ -148,7 +157,7 @@ var RelayClient = class {
       return;
     }
     this.log(`[whalemaid] /password \u7AEF\u70B9\u4E0D\u53EF\u7528\uFF08${res.status}\uFF09\uFF0C\u9000\u56DE\u81EA\u540A\u9500+\u91CD\u6CE8\u518C`);
-    await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}`, {
+    await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}`, {
       method: "DELETE",
       headers: { authorization: `Bearer ${this.cfg.savedCredential}` },
       fingerprint: this.cfg.relayFingerprint
@@ -164,12 +173,17 @@ var RelayClient = class {
         this.startHeartbeat(base, credential);
         return binding2;
       } catch (e) {
-        this.log(`[whalemaid] \u51ED\u636E\u5931\u6548\uFF08${e instanceof Error ? e.message.slice(0, 60) : String(e)}\uFF09\uFF0C\u91CD\u65B0\u6CE8\u518C`);
-        this.cfg.onCredential("");
-        credential = "";
+        if (e instanceof RelayHttpError && CREDENTIAL_REJECTED.includes(e.status)) {
+          this.log(`[whalemaid] \u51ED\u636E\u5931\u6548\uFF08${e.message}\uFF09\uFF0C\u91CD\u65B0\u6CE8\u518C`);
+          this.cfg.onCredential("");
+          credential = "";
+        } else {
+          this.log(`[whalemaid] \u96A7\u9053\u5EFA\u7ACB\u6682\u5931\u8D25\uFF08${e instanceof Error ? e.message.slice(0, 80) : String(e)}\uFF09\uFF0C\u4FDD\u7559\u51ED\u636E\u9000\u907F\u91CD\u8BD5`);
+          throw e;
+        }
       }
     }
-    const res = await pinnedRequest(`${base}/_whalemaid/devices`, {
+    const res = await this.req(`${base}/_whalemaid/devices`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -178,7 +192,16 @@ var RelayClient = class {
       body: JSON.stringify({ deviceId: this.cfg.deviceId, passwordDigest: phcScrypt(this.cfg.longPassword) }),
       fingerprint: this.cfg.relayFingerprint
     });
-    if (res.status >= 300) throw new Error(`\u6CE8\u518C\u5931\u8D25: ${res.status} ${await res.text()}`);
+    if (res.status >= 300) {
+      const text = await res.text();
+      if (res.status === 409 && text.includes("device-already-registered")) {
+        throw new Error(`\u6CE8\u518C\u88AB\u62D2 409 device-already-registered\uFF1A\u8BE5\u8BBE\u5907\u7F16\u53F7\u5DF2\u5728\u4E2D\u7EE7\u767B\u8BB0\uFF0C\u4F46\u672C\u673A\u5DF2\u4FDD\u5B58\u51ED\u636E\u4E22\u5931\u2014\u2014\u9700\u670D\u52A1\u7AEF\u7BA1\u7406\u5458\u540A\u9500\u65E7\u8BBE\u5907\u8BB0\u5F55\uFF08DELETE /_whalemaid/devices/${this.cfg.deviceId} + Bearer \u7BA1\u7406\u5458\u4EE4\u724C\uFF09\u540E\u672C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u91CD\u8BD5\u6210\u529F\uFF0C\u65E0\u9700\u91CD\u542F\u5BBF\u4E3B\uFF08docs/deploy-server.md\uFF09`);
+      }
+      if (res.status === 401) {
+        throw new Error("\u6CE8\u518C\u5931\u8D25 401\uFF1A\u5B89\u88C5\u7801\u65E0\u6548\u6216\u5DF2\u88AB\u6D88\u8017\uFF08\u5355\u6B21\u4EE4\u724C\uFF09\u2014\u2014\u9700\u7BA1\u7406\u5458\u91CD\u53D1\u5B89\u88C5\u7801\u5E76\u66F4\u65B0\u5BBF\u4E3B\u914D\u7F6E relayInstallCode \u540E\u91CD\u542F\u5BBF\u4E3B\uFF08docs/deploy-server.md\uFF09");
+      }
+      throw new RelayHttpError(res.status, `\u6CE8\u518C\u5931\u8D25: ${res.status} ${text}`);
+    }
     const reg = await res.json();
     credential = reg.credential;
     this.cfg.onCredential(credential);
@@ -188,21 +211,31 @@ var RelayClient = class {
   }
   startHeartbeat(base, credential) {
     this.timer = setInterval(() => {
-      pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/heartbeat`, {
+      this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/heartbeat`, {
         method: "POST",
         headers: { authorization: `Bearer ${credential}` },
         fingerprint: this.cfg.relayFingerprint
+      }).then(async (res) => {
+        if (res.status === 200) {
+          try {
+            const body = await res.json();
+            if (body.connectEvents && body.connectEvents > 0) {
+              this.log(`[whalemaid] \u4E3B\u63A7\u7AEF\u5DF2\u8FDE\u63A5\uFF08\u6700\u8FD1 20s \u5185 ${body.connectEvents} \u6B21\u6388\u6743\uFF09\u2014\u2014\u6709\u4EBA\u6B63\u5728\u8FDC\u7A0B\u63A7\u5236\u672C\u673A`);
+            }
+          } catch {
+          }
+        }
       }).catch(() => void 0);
     }, 2e4);
     this.timer.unref();
   }
   async establishTunnel(base, credential) {
-    const res = await pinnedRequest(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/tunnel`, {
       method: "POST",
       headers: { authorization: `Bearer ${credential}` },
       fingerprint: this.cfg.relayFingerprint
     });
-    if (res.status >= 300) throw new Error(`\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
+    if (res.status >= 300) throw new RelayHttpError(res.status, `\u96A7\u9053\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
     const binding = await res.json();
     if (!binding.serverPublicKey) {
       throw new Error("\u670D\u52A1\u7AEF\u672A\u8FD4\u56DE rathole noise \u516C\u94A5\uFF08serverPublicKey\uFF09\uFF0C\u62D2\u7EDD\u5EFA\u7ACB\u96A7\u9053\uFF08SEC-001/003\uFF09");
@@ -253,6 +286,202 @@ var RelayClient = class {
   }
 };
 
+// src/v1/providers.ts
+function voiceCall(req) {
+  const boundary = `----whalemaid-${Math.random().toString(36).slice(2)}`;
+  switch (req.provider) {
+    case "openai":
+      return {
+        url: "https://api.openai.com/v1/audio/transcriptions",
+        headers: { authorization: `Bearer ${req.apiKey}`, "content-type": `multipart/form-data; boundary=${boundary}` },
+        body: multipartBody([
+          ["model", "whisper-1"],
+          ["file", req.audio, req.mimeType, "audio.webm"]
+        ], boundary)
+      };
+    case "groq":
+      return {
+        url: "https://api.groq.com/openai/v1/audio/transcriptions",
+        headers: { authorization: `Bearer ${req.apiKey}`, "content-type": `multipart/form-data; boundary=${boundary}` },
+        body: multipartBody([
+          ["model", "whisper-large-v3"],
+          ["file", req.audio, req.mimeType, "audio.webm"]
+        ], boundary)
+      };
+    case "dashscope":
+      throw new Error("dashscope \u8BED\u97F3\u6587\u4EF6\u8BC6\u522B\u672A\u7ECF\u771F\u5B9E key \u5B9E\u6D4B\uFF0C\u7981\u6B62\u4F7F\u7528\uFF08audit#7\uFF09");
+  }
+}
+function parseVoiceResponse(provider, raw) {
+  const data = JSON.parse(raw);
+  if (provider === "dashscope") {
+    throw new Error("dashscope \u8BED\u97F3\u672A\u7ECF\u5B9E\u6D4B\uFF0C\u7981\u6B62\u4F7F\u7528\uFF08audit#7\uFF09");
+  }
+  const text = typeof data.text === "string" ? data.text : "";
+  if (!text) throw new Error(`\u8BED\u97F3\u8F6C\u5F55\u54CD\u5E94\u7F3A\u5C11 text \u5B57\u6BB5`);
+  return { text };
+}
+function visionCall(req) {
+  const base64 = req.image.toString("base64");
+  const dataUrl = `data:${req.mimeType};base64,${base64}`;
+  switch (req.provider) {
+    case "deepseek-ocr":
+      return {
+        url: "https://api.deepseek.com/chat/completions",
+        headers: { authorization: `Bearer ${req.apiKey}`, "content-type": "application/json" },
+        body: Buffer.from(JSON.stringify({
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: [
+            { type: "text", text: "\u8BF7\u5BF9\u8FD9\u5F20\u56FE\u7247\u505A\u7B80\u77ED\u63CF\u8FF0\uFF08OCR \u6587\u672C + \u753B\u9762\u8981\u70B9\uFF0C100 \u5B57\u5185\uFF09\uFF0C\u4F9B\u6CA1\u6709\u89C6\u89C9\u80FD\u529B\u7684\u6A21\u578B\u7406\u89E3\u3002" },
+            { type: "image_url", image_url: { url: dataUrl } }
+          ] }],
+          max_tokens: 300
+        }))
+      };
+    case "qwen-vl":
+      return {
+        url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        headers: { authorization: `Bearer ${req.apiKey}`, "content-type": "application/json" },
+        body: Buffer.from(JSON.stringify({
+          model: "qwen-vl-max",
+          messages: [{ role: "user", content: [
+            { type: "text", text: "\u8BF7\u5BF9\u8FD9\u5F20\u56FE\u7247\u505A\u7B80\u77ED\u63CF\u8FF0\uFF08OCR \u6587\u672C + \u753B\u9762\u8981\u70B9\uFF0C100 \u5B57\u5185\uFF09\uFF0C\u4F9B\u6CA1\u6709\u89C6\u89C9\u80FD\u529B\u7684\u6A21\u578B\u7406\u89E3\u3002" },
+            { type: "image_url", image_url: { url: dataUrl } }
+          ] }],
+          max_tokens: 300
+        }))
+      };
+    case "openai-vision":
+      return {
+        url: "https://api.openai.com/v1/chat/completions",
+        headers: { authorization: `Bearer ${req.apiKey}`, "content-type": "application/json" },
+        body: Buffer.from(JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: [
+            { type: "text", text: "\u8BF7\u5BF9\u8FD9\u5F20\u56FE\u7247\u505A\u7B80\u77ED\u63CF\u8FF0\uFF08OCR \u6587\u672C + \u753B\u9762\u8981\u70B9\uFF0C100 \u5B57\u5185\uFF09\uFF0C\u4F9B\u6CA1\u6709\u89C6\u89C9\u80FD\u529B\u7684\u6A21\u578B\u7406\u89E3\u3002" },
+            { type: "image_url", image_url: { url: dataUrl } }
+          ] }],
+          max_tokens: 300
+        }))
+      };
+    case "grok-vision":
+      return {
+        url: "https://api.x.ai/v1/chat/completions",
+        headers: { authorization: `Bearer ${req.apiKey}`, "content-type": "application/json" },
+        body: Buffer.from(JSON.stringify({
+          model: "grok-2-vision-latest",
+          messages: [{ role: "user", content: [
+            { type: "text", text: "\u8BF7\u5BF9\u8FD9\u5F20\u56FE\u7247\u505A\u7B80\u77ED\u63CF\u8FF0\uFF08OCR \u6587\u672C + \u753B\u9762\u8981\u70B9\uFF0C100 \u5B57\u5185\uFF09\uFF0C\u4F9B\u6CA1\u6709\u89C6\u89C9\u80FD\u529B\u7684\u6A21\u578B\u7406\u89E3\u3002" },
+            { type: "image_url", image_url: { url: dataUrl } }
+          ] }],
+          max_tokens: 300
+        }))
+      };
+    case "gemini":
+      return {
+        url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(req.apiKey)}`,
+        headers: { "content-type": "application/json" },
+        body: Buffer.from(JSON.stringify({
+          contents: [{ parts: [
+            { text: "\u8BF7\u5BF9\u8FD9\u5F20\u56FE\u7247\u505A\u7B80\u77ED\u63CF\u8FF0\uFF08OCR \u6587\u672C + \u753B\u9762\u8981\u70B9\uFF0C100 \u5B57\u5185\uFF09\uFF0C\u4F9B\u6CA1\u6709\u89C6\u89C9\u80FD\u529B\u7684\u6A21\u578B\u7406\u89E3\u3002" },
+            { inline_data: { mime_type: req.mimeType, data: base64 } }
+          ] }]
+        }))
+      };
+  }
+}
+function parseVisionResponse(provider, raw) {
+  const data = JSON.parse(raw);
+  if (provider === "gemini") {
+    const text2 = extractFirstText(data.candidates);
+    if (!text2) throw new Error("\u89C6\u89C9\u54CD\u5E94\u7F3A\u5C11\u6587\u672C");
+    return { description: text2 };
+  }
+  const choices = data.choices;
+  const content = choices?.[0]?.message?.content;
+  const text = typeof content === "string" ? content : content?.find((p) => p.type === "text")?.text ?? "";
+  if (!text) throw new Error("\u89C6\u89C9\u54CD\u5E94\u7F3A\u5C11\u6587\u672C");
+  return { description: text };
+}
+function extractFirstText(value) {
+  if (Array.isArray(value)) {
+    for (const cand of value) {
+      const parts = cand?.content?.parts ?? [];
+      for (const p of parts) if (typeof p.text === "string" && p.text) return p.text;
+    }
+  }
+  return "";
+}
+function multipartBody(fields, boundary) {
+  const parts = [];
+  for (const f of fields) {
+    if (typeof f[1] === "string") {
+      parts.push(Buffer.from(`--${boundary}\r
+content-disposition: form-data; name="${f[0]}"\r
+\r
+${f[1]}\r
+`));
+    } else {
+      const [, content, mime, filename] = f;
+      parts.push(Buffer.from(`--${boundary}\r
+content-disposition: form-data; name="${f[0]}"; filename="${filename}"\r
+content-type: ${mime}\r
+\r
+`));
+      parts.push(content);
+      parts.push(Buffer.from("\r\n"));
+    }
+  }
+  parts.push(Buffer.from(`--${boundary}--\r
+`));
+  return Buffer.concat(parts);
+}
+var VOICE_PROVIDERS = ["openai", "groq", "dashscope"];
+var VISION_PROVIDERS = ["deepseek-ocr", "qwen-vl", "openai-vision", "grok-vision", "gemini"];
+
+// src/v1/routes.ts
+async function resolveKey(ref, deps) {
+  if (!deps.credentials) throw new Error("\u5BBF\u4E3B\u65E0 credentials \u670D\u52A1");
+  const hit = await deps.credentials.resolve(ref);
+  const value = hit?.value;
+  if (!value || value.length === 0) throw new Error(`\u51ED\u636E\u5F15\u7528 ${ref} \u672A\u8BBE\u7F6E\uFF08\u5BBF\u4E3B dsh-credentials\uFF09`);
+  return value;
+}
+async function transcribe(body, deps) {
+  const provider = deps.cfg.voiceProvider;
+  if (!VOICE_PROVIDERS.includes(provider)) throw new Error(`voiceProvider \u672A\u914D\u7F6E\u6216\u672A\u77E5: ${deps.cfg.voiceProvider}`);
+  const payload = JSON.parse(body.toString("utf8"));
+  if (!payload.audio) throw new Error("audio(base64) \u5FC5\u586B");
+  const call = voiceCall({
+    provider,
+    apiKey: await resolveKey(deps.cfg.voiceCredentialRef, deps),
+    audio: Buffer.from(payload.audio, "base64"),
+    mimeType: payload.mimeType ?? "audio/webm"
+  });
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const res = await fetchImpl(call.url, { method: "POST", headers: call.headers, body: call.body });
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`\u8BED\u97F3\u8F6C\u5F55\u4E0A\u6E38\u5931\u8D25 ${res.status}: ${raw.slice(0, 200)}`);
+  return parseVoiceResponse(provider, raw);
+}
+async function describeImage(body, deps) {
+  const provider = deps.cfg.visionProvider;
+  if (!VISION_PROVIDERS.includes(provider)) throw new Error(`visionProvider \u672A\u914D\u7F6E\u6216\u672A\u77E5: ${deps.cfg.visionProvider}`);
+  const payload = JSON.parse(body.toString("utf8"));
+  if (!payload.image) throw new Error("image(base64) \u5FC5\u586B");
+  const call = visionCall({
+    provider,
+    apiKey: await resolveKey(deps.cfg.visionCredentialRef, deps),
+    image: Buffer.from(payload.image, "base64"),
+    mimeType: payload.mimeType ?? "image/png"
+  });
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const res = await fetchImpl(call.url, { method: "POST", headers: call.headers, body: call.body });
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`\u89C6\u89C9\u63CF\u8FF0\u4E0A\u6E38\u5931\u8D25 ${res.status}: ${raw.slice(0, 200)}`);
+  return parseVisionResponse(provider, raw);
+}
+
 // src/config.ts
 import Schema from "@deepseek-ai/schemastery";
 var Config = Schema.object({
@@ -261,7 +490,11 @@ var Config = Schema.object({
   relayInstallCode: Schema.string().default(""),
   relayFingerprint: Schema.string().default(""),
   ratholeBin: Schema.string().default("rathole"),
-  relayPort: Schema.number().default(2333)
+  relayPort: Schema.number().default(2333),
+  voiceProvider: Schema.string().default(""),
+  voiceCredentialRef: Schema.string().default(""),
+  visionProvider: Schema.string().default(""),
+  visionCredentialRef: Schema.string().default("")
 });
 
 // src/index.ts
@@ -273,7 +506,11 @@ var DEFAULTS = {
   relayInstallCode: "",
   relayFingerprint: "",
   ratholeBin: "rathole",
-  relayPort: 2333
+  relayPort: 2333,
+  voiceProvider: "",
+  voiceCredentialRef: "",
+  visionProvider: "",
+  visionCredentialRef: ""
 };
 function apply(ctx, config) {
   const resolved = { ...DEFAULTS, ...config };
@@ -304,10 +541,16 @@ function apply(ctx, config) {
     return;
   }
   if (!hostWeb?.port) {
-    ctx.logger.error("[whalemaid] \u5BBF\u4E3B\u65E0 web \u670D\u52A1\uFF08webServer.port \u7F3A\u5931\uFF09\uFF1A\u672C\u63D2\u4EF6\u4F9D\u8D56\u5B98\u65B9 web \u8F7D\u4F53\uFF0C\u4E0D\u505A\u4EFB\u4F55\u81EA\u5EFA\u76D1\u542C");
+    ctx.logger.error("[whalemaid] \u5BBF\u4E3B\u65E0 web \u670D\u52A1\uFF08webServer.port \u7F3A\u5931\uFF09\uFF1A\u672C\u63D2\u4EF6\u4F9D\u8D56\u5B98\u65B9 web \u8F7D\u4F53\uFF0C\u63D2\u4EF6\u96F6\u76D1\u542C");
     return;
   }
   ctx.logger.info(`[whalemaid] \u8BBE\u5907\u7F16\u53F7 ${store.deviceId}\uFF08\u957F\u671F\u5BC6\u7801\u89C1 ${store.file}\uFF09\uFF1B\u96A7\u9053\u76EE\u6807 = \u5BBF\u4E3B\u539F\u751F web:${hostWeb.port}\uFF1B\u672C\u5730\u7BA1\u7406 token=${store.adminToken}`);
+  ctx.logger.info(`[whalemaid] ==== WhaleMaid \u53D7\u63A7\u7AEF\u8BF4\u660E ====
+  \xB7 \u8BBE\u5907\u7F16\u53F7: ${store.deviceId}\uFF08\u4E3B\u63A7\u7AEF\u7528\u300C\u7F16\u53F7+\u957F\u671F\u5BC6\u7801\u300D\u8FDE\u63A5\uFF0C\u5168\u7A0B\u65E0 IP\uFF09
+  \xB7 \u957F\u671F\u5BC6\u7801: \u89C1 ${store.file} \u7684 longPassword\uFF1B\u8F6E\u6362: POST /whalemaid/rotate-password + x-whalemaid-token: ${store.adminToken}
+  \xB7 \u5B89\u5168: \u6709\u4EBA\u8FDE\u63A5\u672C\u673A = \u5B8C\u6574\u8FDC\u7A0B\u63A7\u5236\uFF0C\u7B49\u540C\u5176\u5750\u5728\u672C\u673A\u524D\uFF1B\u8BF7\u52FF\u6CC4\u9732\u5BC6\u7801\uFF0C\u5931\u7A83\u5373\u8F6E\u6362
+  \xB7 \u88AB\u8FDE\u63A5\u63D0\u793A: \u4E3B\u63A7\u7AEF\u8FDE\u63A5\u6210\u529F/\u65AD\u5F00\u4F1A\u6253\u5370\u5728\u4E0B\u65B9\u65E5\u5FD7\uFF08[whalemaid] \u4E3B\u63A7\u7AEF\u5DF2\u8FDE\u63A5/\u5DF2\u65AD\u5F00\uFF09
+  ========================================`);
   let attempt = 0;
   const tryStart = async () => {
     try {
@@ -343,6 +586,60 @@ function apply(ctx, config) {
     });
   } catch {
     ctx.logger.warn("[whalemaid] \u5BBF\u4E3B web \u8DEF\u7531\u4E0D\u53EF\u7528\uFF0C\u5BC6\u7801\u8F6E\u6362\u5165\u53E3\u8DF3\u8FC7");
+  }
+  try {
+    const v1Cfg = {
+      voiceProvider: resolved.voiceProvider,
+      voiceCredentialRef: resolved.voiceCredentialRef,
+      visionProvider: resolved.visionProvider,
+      visionCredentialRef: resolved.visionCredentialRef
+    };
+    if (v1Cfg.voiceProvider || v1Cfg.visionProvider) {
+      const web = ctx;
+      const credentials = web.get?.("credentials");
+      const deps = {
+        cfg: v1Cfg,
+        credentials,
+        log: (m) => ctx.logger.info(m)
+      };
+      const readBody = (req) => new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on?.("data", (c) => chunks.push(Buffer.from(c)));
+        req.on?.("end", () => resolve(Buffer.concat(chunks)));
+        req.on?.("error", reject);
+      });
+      const jsonRoute = (path, run) => {
+        web.webServer?.register?.({
+          kind: "exact",
+          path,
+          handler: (req, res) => {
+            if (req.method !== "POST") {
+              res.writeHead(405);
+              res.end("method not allowed");
+              return;
+            }
+            void readBody(req).then(async (body) => {
+              try {
+                const result = await run(body);
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify(result));
+              } catch (e) {
+                res.writeHead(400, { "content-type": "application/json" });
+                res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+              }
+            }).catch((e) => {
+              res.writeHead(400, { "content-type": "application/json" });
+              res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+            });
+          }
+        });
+      };
+      if (v1Cfg.voiceProvider) jsonRoute("/api/whalemaid/voice.transcribe", (body) => transcribe(body, deps));
+      if (v1Cfg.visionProvider) jsonRoute("/api/whalemaid/vision.describe", (body) => describeImage(body, deps));
+      ctx.logger.info(`[whalemaid] V1 \u589E\u5F3A\u9762\u5DF2\u6302\u8F7D: voice=${v1Cfg.voiceProvider || "-"} vision=${v1Cfg.visionProvider || "-"}\uFF08BYOK\uFF0Ckey \u53EA\u5B58\u5BBF\u4E3B\uFF09`);
+    }
+  } catch (e) {
+    ctx.logger.warn(`[whalemaid] V1 \u8DEF\u7531\u6302\u8F7D\u5931\u8D25: ${e instanceof Error ? e.message : String(e)}`);
   }
   ctx.effect(() => () => {
     relay.stop();
