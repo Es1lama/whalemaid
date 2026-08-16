@@ -4,7 +4,7 @@ import CommonCrypto
 
 /// iOS 主控端隧道代理（Android ProxyCore 的 Swift 移植；纯 Foundation/Network，无第三方依赖）
 /// SPEC: docs/protocol.md#PROTO-001/003/008、docs/security-audit.md#SEC-001（TOFU 指纹固定）
-/// - 本地 127.0.0.1:43969（占用则随机）HTTP+WS 服务器：设备管理页 / _ctrl/connect / _ctrl/status / WS 事件桥 / 隧道反代
+/// - 本地 127.0.0.1:43969 固定 HTTP+WS 服务器：设备管理页 / _ctrl/connect / _ctrl/status / WS 事件桥 / 隧道反代
 /// - 中继证书 TOFU：首连捕获 SPKI sha256 落 UserDefaults，此后每次 TLS 校验（身份=指纹，主机名校验冗余）
 /// - 每个隧道请求 = /connect 签一次性 grant → WSS /_whalemaid/tunnel-ws → GRANT → 转发 → chunked 解码 → MIME 透传
 /// - 官方 HTML 注入 AbortSignal polyfill（老 WebView 兼容，ADR-039 移动适配）
@@ -12,14 +12,7 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
     /// 应用级单例（AppDelegate 与插件共用，与 Android startWhaleMaidCore 同构）
     static let shared = TunnelProxy()
 
-    struct Session {
-        var server = ""
-        var deviceId = ""
-        var password = ""
-        var isEmpty: Bool { server.isEmpty }
-    }
-
-    private(set) var session = Session()
+    private(set) var session = ControllerCredentialSession()
     private let prefs = UserDefaults.standard
     private var listener: NWListener?
     private var pinnedSession: URLSession!
@@ -44,9 +37,8 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
             l.newConnectionHandler = { [weak self] conn in self?.handleConnection(conn) }
             l.stateUpdateHandler = { [weak self] (state: NWListener.State) in
                 switch state {
-                case .failed:
-                    // 固定端口被占用 → 回退随机端口
-                    if port != 0 { self?.bind(port: 0) }
+                case .failed(let error):
+                    NSLog("[whalemaid] 固定本地端口 %u 启动失败: %@", port, String(describing: error))
                 case .ready:
                     let actual = l.port?.rawValue ?? port
                     self?.onReady?(actual)
@@ -56,7 +48,7 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
             l.start(queue: queue)
             listener = l
         } catch {
-            if port != 0 { bind(port: 0) }
+            NSLog("[whalemaid] 固定本地端口 %u 创建失败: %@", port, String(describing: error))
         }
     }
 
@@ -130,7 +122,7 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
     // MARK: - 路由
 
     private func dispatch(_ conn: NWConnection, method: String, uri: String, headers: [String: String], body: Data?) {
-        switch TunnelPure.route(uri: uri, method: method, connected: !session.isEmpty) {
+        switch TunnelPure.route(uri: uri, method: method, connected: session.connected) {
         case .management:
             let html = managementPage()
             respond(conn, status: 200, mime: "text/html; charset=utf-8", headers: [:], body: html)
@@ -153,13 +145,15 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
             }
         case .connect:
             guard let body = body, let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-                  let server = json["server"] as? String, let deviceId = json["deviceId"] as? String,
-                  let password = json["password"] as? String, !server.isEmpty, !deviceId.isEmpty, !password.isEmpty else {
-                respondJson(conn, status: 400, body: "{\"error\":\"server/deviceId/password 必填\"}")
+                  let server = json["server"] as? String, let rawDeviceId = json["deviceId"] as? String,
+                  let password = json["password"] as? String, let kindWire = json["credentialKind"] as? String,
+                  let kind = try? ControllerCredentialKind(wire: kindWire),
+                  !server.isEmpty, !rawDeviceId.isEmpty, !password.isEmpty else {
+                respondJson(conn, status: 400, body: "{\"error\":\"server/deviceId/password/credentialKind 必填\"}")
                 return
             }
             let srv = server.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            session = Session(server: srv, deviceId: deviceId.uppercased(), password: password)
+            let deviceId = rawDeviceId.uppercased()
             relayRequest(server: srv, path: "/_whalemaid/devices/\(deviceId)/status", method: "GET") { [weak self] code, respBody in
                 guard let self = self else { return }
                 if code != 200 {
@@ -171,18 +165,38 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
                     return
                 }
                 if !(st["registered"] as? Bool ?? false) {
-                    self.respondJson(conn, status: 404, body: "{\"error\":\"设备编号不存在\"}")
+                    self.respondJson(conn, status: 404, body: "{\"error\":\"DEVICE_NOT_FOUND\"}")
                     return
                 }
                 if !(st["online"] as? Bool ?? false) {
-                    self.respondJson(conn, status: 503, body: "{\"error\":\"设备不在线（受控端未开启或已离线）\"}")
+                    self.respondJson(conn, status: 503, body: "{\"error\":\"DEVICE_OFFLINE\"}")
                     return
                 }
-                self.relayRequest(server: srv, path: "/_whalemaid/connect", method: "POST", body: "{\"deviceId\":\"\(deviceId)\",\"password\":\"\(password)\"}") { code2, _ in
-                    if code2 != 200 {
-                        self.respondJson(conn, status: 401, body: "{\"error\":\"密码错误\"}")
-                    } else {
-                        self.respondJson(conn, status: 200, body: "{\"ok\":true}")
+                let payload: [String: Any] = ["deviceId": deviceId, "password": password, "credentialKind": kind.rawValue]
+                guard let authBody = self.jsonString(payload) else {
+                    self.respondJson(conn, status: 500, body: "{\"error\":\"INVALID_REQUEST\"}")
+                    return
+                }
+                self.relayRequest(server: srv, path: "/_whalemaid/connect", method: "POST", body: authBody) { code2, response in
+                    guard code2 == 200,
+                          let auth = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+                          let token = auth["sessionToken"] as? String,
+                          let returnedWire = auth["credentialKind"] as? String,
+                          let returnedKind = try? ControllerCredentialKind(wire: returnedWire),
+                          returnedKind == kind,
+                          !token.isEmpty else {
+                        if code2 == 200 {
+                            self.respondJson(conn, status: 502, body: "{\"error\":\"INVALID_RELAY_RESPONSE\"}")
+                        } else {
+                            self.respond(conn, status: code2, mime: "application/json", headers: [:], body: response)
+                        }
+                        return
+                    }
+                    do {
+                        try self.session.commit(server: srv, deviceId: deviceId, password: password, kind: kind, token: token)
+                        self.respondJson(conn, status: 200, body: "{\"ok\":true,\"credentialKind\":\"\(kind.rawValue)\"}")
+                    } catch {
+                        self.respondJson(conn, status: 502, body: "{\"error\":\"INVALID_RELAY_RESPONSE\"}")
                     }
                 }
             }
@@ -197,13 +211,49 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
 
     // MARK: - 隧道请求
 
+    private func jsonString(_ value: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func requestGrant(done: @escaping (Int, String?) -> Void) {
+        func exchange(useToken: Bool) {
+            guard let payload = try? session.payload(useToken: useToken), let body = jsonString(payload) else {
+                done(401, nil)
+                return
+            }
+            relayRequest(server: session.server, path: "/_whalemaid/connect", method: "POST", body: body) { [weak self] code, response in
+                guard let self = self else { return }
+                if useToken && self.session.canFallbackPassword(status: code) {
+                    exchange(useToken: false)
+                    return
+                }
+                guard code == 200,
+                      let json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+                      let grant = json["grant"] as? String,
+                      let token = json["sessionToken"] as? String,
+                      let kindWire = json["credentialKind"] as? String,
+                      let kind = try? ControllerCredentialKind(wire: kindWire),
+                      kind == self.session.credentialKind else {
+                    done(code, nil)
+                    return
+                }
+                do {
+                    try self.session.updateToken(token)
+                    done(200, grant)
+                } catch {
+                    done(502, nil)
+                }
+            }
+        }
+        exchange(useToken: true)
+    }
+
     private func tunnelRequest(_ conn: NWConnection, method: String, uri: String, headers: [String: String], body: Data?) {
         let srv = session.server
-        relayRequest(server: srv, path: "/_whalemaid/connect", method: "POST",
-                     body: "{\"deviceId\":\"\(session.deviceId)\",\"password\":\"\(session.password)\"}") { [weak self] code, respBody in
+        requestGrant { [weak self] code, grant in
             guard let self = self else { return }
-            guard code == 200, let json = try? JSONSerialization.jsonObject(with: respBody) as? [String: Any],
-                  let grant = json["grant"] as? String else {
+            guard code == 200, let grant = grant else {
                 self.respondJson(conn, status: 502, body: "{\"error\":\"connect \\(code)\"}")
                 return
             }
@@ -270,11 +320,9 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
         send(conn, Data(respHead.utf8))
 
         let srv = session.server
-        relayRequest(server: srv, path: "/_whalemaid/connect", method: "POST",
-                     body: "{\"deviceId\":\"\(session.deviceId)\",\"password\":\"\(session.password)\"}") { [weak self] code, respBody in
-            guard let self = self else { self?.close(conn); return }
-            guard code == 200, let json = try? JSONSerialization.jsonObject(with: respBody) as? [String: Any],
-                  let grant = json["grant"] as? String else { self.close(conn); return }
+        requestGrant { [weak self] code, grant in
+            guard let self = self else { return }
+            guard code == 200, let grant = grant else { self.close(conn); return }
             guard let url = URL(string: "wss://\(srv)/_whalemaid/tunnel-ws") else { self.close(conn); return }
             let task = self.pinnedSession.webSocketTask(with: url)
             task.resume()

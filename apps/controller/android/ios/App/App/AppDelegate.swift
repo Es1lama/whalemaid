@@ -2,31 +2,19 @@ import UIKit
 import Capacitor
 
 @objc(WhaleMaidTunnelPlugin)
-public class WhaleMaidTunnelPlugin: CAPPlugin {
+public class WhaleMaidTunnelPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "WhaleMaidTunnelPlugin"
+    public let jsName = "WhaleMaidTunnel"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
+    ]
+
     private static let sharedProxy = TunnelProxy.shared
 
     @objc func start(_ call: CAPPluginCall) {
         WhaleMaidTunnelPlugin.sharedProxy.start { port in
             call.resolve(["port": port])
         }
-    }
-
-    /// 记住上次登录状态（UserDefaults；与 Android SharedPreferences 同语义，不放 localStorage）
-    @objc func saveState(_ call: CAPPluginCall) {
-        let prefs = UserDefaults.standard
-        prefs.set(call.getString("server") ?? "", forKey: "wm.server")
-        prefs.set(call.getString("deviceId") ?? "", forKey: "wm.deviceId")
-        prefs.set(call.getString("password") ?? "", forKey: "wm.password")
-        call.resolve()
-    }
-
-    @objc func loadState(_ call: CAPPluginCall) {
-        let prefs = UserDefaults.standard
-        call.resolve([
-            "server": prefs.string(forKey: "wm.server") ?? "",
-            "deviceId": prefs.string(forKey: "wm.deviceId") ?? "",
-            "password": prefs.string(forKey: "wm.password") ?? "",
-        ])
     }
 }
 
