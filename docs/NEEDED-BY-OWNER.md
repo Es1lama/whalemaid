@@ -16,7 +16,7 @@
 
 ## 实机测试（我已做完桌面侧全部；剩手机端人工步骤）
 
-4. [ ] **手机实机**：电脑端插件配置 `host: 0.0.0.0`（profile cordis.patch.yml）→ 手机装 Android APK（CI 产物或 `gradle assembleDebug`）或开 `http://<电脑IP>:3180/m` → 设备 ID（WHALE-XXXX-XXXX 自定）＋ 长期密码（`<DSH_HOME>/whalemaid/store.json`）。iOS 需你本机有 Xcode 跑真机/模拟器（CI 已验证构建）。
+4. [ ] **手机实机抽检**：Android 侧我已在 BlueStacks 全链验证（记住登录态自动重连、设备在线徽章、官方 UI/API/WS 隧道、V1 语音/视觉路由透传，2026-08-16）；你只需在自己的真机上装 APK 抽检一次（CI 产物或 `gradle assembleDebug`；电脑侧插件配置 `host: 0.0.0.0`，见 profile cordis.patch.yml）。iOS 需你本机有 Xcode 跑真机/模拟器（CI 已验证构建）。
 5. [ ] **DashScope 热词 API 实测**：真实 key 验证官方「定制热词 HTTP API」端点/字段后回写（hotwords 包 dashscope 模式与 ADR-034 标注处）。
 
 ## Phase B 前（硬门槛）
