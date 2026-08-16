@@ -35,11 +35,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
       - uses: android-actions/setup-android@v3
       - name: 安装 compileSdk 35
         run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: cap sync android（生成 cordova.variables.gradle/web 资源，模板 gitignore 未入库）
+        working-directory: apps/controller/android
+        run: npx cap sync android
       - name: gradle assembleDebug（剔除本机代理配置，CI 直连下载依赖）
         working-directory: apps/controller/android/android
         run: |
