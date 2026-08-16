@@ -8,12 +8,13 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import https from 'node:https'
 import WebSocket, { WebSocketServer } from 'ws'
+import { GrantSession, RelayConnectError } from './auth-session.mjs'
 
 const PORT = Number(process.env.CONTROLLER_PORT ?? 3210)
 const HOST_AUTHORITY = process.env.CONTROLLER_HOST_AUTHORITY ?? '127.0.0.1:3181' // 受控端宿主 web 权威（过官方信任栅栏用）
 
-/** 会话内存：已连接设备 + 密码（仅进程内存，不落盘；grant 单次消费故每次代理都要重签） */
-const session = { server: '', deviceId: '', password: '' }
+/** 当前控制路由只驻留进程内存；临时密码首次成功后立即丢弃，后续仅用 sessionToken。 */
+const session = new GrantSession()
 
 function json(res, status, obj) {
   res.writeHead(status, { 'content-type': 'application/json' })
@@ -68,16 +69,23 @@ function relayRequest(server, path, opts = {}) {
   })
 }
 
+function relayConnect(server, payload) {
+  return relayRequest(server, '/_whalemaid/connect', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+function requestGrant() {
+  return session.requestGrant(payload => relayConnect(session.server, payload))
+}
+
 /** 一次隧道代理：/connect 签 grant → WSS GRANT → 转发字节 → 回收响应（grant 单次消费，逐请求签名） */
 function tunnelExchange(httpText, binaryFrames = []) {
   return new Promise((resolve, reject) => {
-    relayRequest(session.server, '/_whalemaid/connect', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ deviceId: session.deviceId, password: session.password }),
-    }).then((c) => {
-      if (c.status !== 200) return reject(new Error(`connect ${c.status}: ${c.body}`))
-      const grant = JSON.parse(c.body).grant
+    requestGrant().then((connection) => {
+      const grant = connection.grant
       const ws = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false })
       const out = []
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('隧道超时')) }, 15_000)
@@ -116,12 +124,18 @@ h1{font-size:20px;margin:0 0 4px} .sub{color:#8b93a1;font-size:13px;margin:0 0 2
 label{display:block;font-size:13px;color:#9aa3b2;margin:14px 0 6px}
 input{width:100%;box-sizing:border-box;background:#0f1115;border:1px solid #2c313d;color:#e6e8eb;border-radius:8px;padding:11px 12px;font-size:15px}
 input:focus{outline:none;border-color:#4c7dff}
+.mode{display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:3px;border:1px solid #2c313d;border-radius:8px;background:#0f1115}
+.mode label{margin:0;cursor:pointer}.mode input{position:absolute;opacity:0;pointer-events:none}.mode span{display:block;padding:8px;text-align:center;border-radius:5px;color:#9aa3b2}
+.mode input:checked+span{background:#2c313d;color:#e6e8eb}.mode input:focus-visible+span{outline:2px solid #8b93a1;outline-offset:1px}
 button{width:100%;margin-top:22px;background:#4c7dff;border:0;color:#fff;border-radius:8px;padding:12px;font-size:15px;cursor:pointer}
 button:disabled{opacity:.5;cursor:wait}
 #status{margin-top:14px;font-size:13px;color:#8b93a1;min-height:18px}
 .err{color:#ff6b6b}
 </style></head><body><div class="card"><h1>WhaleMaid</h1><p class="sub">远程控制 · 设备编号 + 密码（无 IP）</p>
 <label>服务端地址（仅首次）</label><input id="server" placeholder="relay.example.com" autocomplete="off">
+<label>连接方式</label><div class="mode" role="radiogroup" aria-label="连接方式">
+<label><input type="radio" name="kind" value="longTerm" checked><span>长期密码</span></label>
+<label><input type="radio" name="kind" value="temporary"><span>短期密码</span></label></div>
 <label>设备编号</label><input id="device" placeholder="WHALE-XXXX-XXXX" autocomplete="off" autocapitalize="characters">
 <label>设备密码</label><input id="pw" type="password" placeholder="长期密码" autocomplete="off">
 <button id="go">连接</button><div id="status"></div></div>
@@ -130,14 +144,25 @@ const $ = (id) => document.getElementById(id)
 const saved = JSON.parse(localStorage.getItem('whalemaid-controller') ?? '{}')
 $('server').value = saved.server ?? ''
 $('device').value = saved.device ?? ''
+const errors = {
+  DEVICE_NOT_FOUND: '设备编号不存在', DEVICE_OFFLINE: '设备不在线', INVALID_CREDENTIAL: '密码错误',
+  CREDENTIAL_EXPIRED: '短期密码已过期', CREDENTIAL_CONSUMED: '短期密码已使用', CREDENTIAL_REVOKED: '短期密码已撤销',
+  RATE_LIMITED: '尝试过多，请稍后再试', LOCKED: '密码已暂时锁定，请稍后再试'
+}
+for (const radio of document.querySelectorAll('input[name="kind"]')) radio.addEventListener('change', () => {
+  $('pw').placeholder = radio.checked && radio.value === 'temporary' ? '短期密码' : '长期密码'
+})
 $('go').onclick = async () => {
   const st = $('status'); st.className = ''; st.textContent = '正在连接…'; $('go').disabled = true
   try {
+    const credentialKind = document.querySelector('input[name="kind"]:checked').value
     const res = await fetch('/_ctrl/connect', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ server: $('server').value, deviceId: $('device').value.toUpperCase(), password: $('pw').value }) })
+      body: JSON.stringify({ server: $('server').value, deviceId: $('device').value.toUpperCase(), password: $('pw').value, credentialKind }) })
     const data = await res.json()
-    if (!res.ok) { st.className = 'err'; st.textContent = data.error ?? ('失败 ' + res.status); $('go').disabled = false; return }
-    localStorage.setItem('whalemaid-controller', JSON.stringify({ server: $('server').value, device: $('device').value.toUpperCase() }))
+    if (!res.ok) { st.className = 'err'; st.textContent = errors[data.error] ?? data.error ?? ('失败 ' + res.status); $('go').disabled = false; return }
+    localStorage.setItem('whalemaid-controller', JSON.stringify(credentialKind === 'longTerm'
+      ? { server: $('server').value, device: $('device').value.toUpperCase() }
+      : { server: $('server').value }))
     st.textContent = '已连接，正在载入官方界面…'
     location.href = '/'
   } catch (e) { st.className = 'err'; st.textContent = String(e); $('go').disabled = false }
@@ -175,27 +200,32 @@ const server = createServer(async (req, res) => {
     req.on('data', (c) => body += c)
     req.on('end', async () => {
       try {
-        const { server: srv, deviceId, password } = JSON.parse(body)
-        if (!srv || !deviceId || !password) return json(res, 400, { error: 'server/deviceId/password 必填' })
-        session.server = srv.replace(/^https?:\/\//, '').replace(/\/$/, '')
-        session.deviceId = deviceId
-        session.password = password
-        const probe = await relayRequest(session.server, `/_whalemaid/devices/${deviceId}/status`)
+        const { server: srv, deviceId: rawDeviceId, password, credentialKind } = JSON.parse(body)
+        if (!srv || !rawDeviceId || !password || !['longTerm', 'temporary'].includes(credentialKind)) {
+          return json(res, 400, { error: 'server/deviceId/password/credentialKind 必填' })
+        }
+        const relayServer = srv.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        const deviceId = rawDeviceId.toUpperCase()
+        const probe = await relayRequest(relayServer, `/_whalemaid/devices/${deviceId}/status`)
         if (probe.status !== 200) return json(res, 502, { error: '服务端不可达: ' + probe.status })
         const st = JSON.parse(probe.body)
-        if (!st.registered) return json(res, 404, { error: '设备编号不存在' })
-        if (!st.online) return json(res, 503, { error: '设备不在线（受控端未开启或已离线）' })
-        // 预验证密码（防把错误密码带进 UI 流程）
-        const auth = await relayRequest(session.server, '/_whalemaid/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceId, password }) })
-        if (auth.status !== 200) return json(res, 401, { error: '密码错误' })
-        json(res, 200, { ok: true })
-      } catch (e) { json(res, 502, { error: String(e) }) }
+        if (!st.registered) return json(res, 404, { error: 'DEVICE_NOT_FOUND' })
+        if (!st.online) return json(res, 503, { error: 'DEVICE_OFFLINE' })
+        await session.authenticate(
+          { server: relayServer, deviceId, password, credentialKind },
+          payload => relayConnect(relayServer, payload),
+        )
+        json(res, 200, { ok: true, credentialKind })
+      } catch (e) {
+        if (e instanceof RelayConnectError) return json(res, e.status, { error: e.code })
+        json(res, 502, { error: String(e) })
+      }
     })
     return
   }
 
   // 未连接：只给设备管理页
-  if (!session.deviceId) return serveControllerPage(res)
+  if (!session.connected) return serveControllerPage(res)
 
   // 反向代理：宿主官方 UI/静态/API 全部经隧道
   try {
@@ -233,11 +263,9 @@ const server = createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true })
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x')
-  if (!url.pathname.startsWith('/api/events') || !session.deviceId) { socket.destroy(); return }
+  if (!url.pathname.startsWith('/api/events') || !session.connected) { socket.destroy(); return }
   const tunnel = async () => {
-    const c = await relayRequest(session.server, '/_whalemaid/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: session.deviceId, password: session.password }) })
-    if (c.status !== 200) { socket.destroy(); return }
-    const grant = JSON.parse(c.body).grant
+    const grant = (await requestGrant()).grant
     const up = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false })
     up.on('open', () => {
       try { assertWssFingerprint(session.server, up) } catch (e) { up.terminate(); socket.destroy(); return }

@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "node --check server.mjs",
-    "test": "node --check server.mjs",
+    "test": "node --check server.mjs && node --test *.test.mjs",
     "start": "node server.mjs"
   },
   "dependencies": {
