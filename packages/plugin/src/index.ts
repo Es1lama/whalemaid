@@ -4,6 +4,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Store } from './store.js'
 import { RelayClient } from './relay.js'
+import * as v1 from './v1/routes.js'
 
 export const name = 'whalemaid'
 
@@ -21,6 +22,10 @@ const DEFAULTS: Config = {
   relayFingerprint: '',
   ratholeBin: 'rathole',
   relayPort: 2333,
+  voiceProvider: '',
+  voiceCredentialRef: '',
+  visionProvider: '',
+  visionCredentialRef: '',
 }
 
 export function apply(ctx: Context, config?: Config): void {
@@ -117,6 +122,73 @@ export function apply(ctx: Context, config?: Config): void {
     })
   } catch {
     ctx.logger.warn('[whalemaid] 宿主 web 路由不可用，密码轮换入口跳过')
+  }
+
+  // PROTO-005/006 V1 语音/视觉 BYOK 路由：仅在配置了 provider 时挂载；
+  // 承载 = 官方 webServer.register（与官方路由同源；主控端经隧道同源调用 /api/whalemaid/*）
+  // key 只存宿主 dsh-credentials（TM-007/ADR-013）；知情同意由前端 UI 负责（TM-012）
+  try {
+    const v1Cfg = {
+      voiceProvider: resolved.voiceProvider,
+      voiceCredentialRef: resolved.voiceCredentialRef,
+      visionProvider: resolved.visionProvider,
+      visionCredentialRef: resolved.visionCredentialRef,
+    }
+    if (v1Cfg.voiceProvider || v1Cfg.visionProvider) {
+      const web = ctx as unknown as {
+        webServer?: {
+          register?: (route: {
+            kind: 'exact'
+            path: string
+            handler: (req: { method?: string; headers: Record<string, string | string[] | undefined>; on?: (ev: string, cb: (chunk?: unknown) => void) => void }, res: { writeHead: (code: number, headers?: Record<string, string>) => void; end: (body: string) => void }) => void
+          }) => () => void
+        }
+        get?: (name: string) => unknown
+      }
+      const credentials = (web as { get?: (name: string) => unknown }).get?.('credentials') as v1.CredentialsService | undefined
+      const deps: v1.V1Deps = {
+        cfg: v1Cfg,
+        credentials,
+        log: (m) => ctx.logger.info(m),
+      }
+      const readBody = (req: { on?: (ev: string, cb: (chunk?: unknown) => void) => void }) => new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = []
+        req.on?.('data', (c) => chunks.push(Buffer.from(c as Buffer)))
+        req.on?.('end', () => resolve(Buffer.concat(chunks)))
+        req.on?.('error', reject)
+      })
+      const jsonRoute = (path: string, run: (body: Buffer) => Promise<unknown>) => {
+        web.webServer?.register?.({
+          kind: 'exact',
+          path,
+          handler: (req, res) => {
+            if (req.method !== 'POST') {
+              res.writeHead(405)
+              res.end('method not allowed')
+              return
+            }
+            void readBody(req).then(async (body) => {
+              try {
+                const result = await run(body)
+                res.writeHead(200, { 'content-type': 'application/json' })
+                res.end(JSON.stringify(result))
+              } catch (e) {
+                res.writeHead(400, { 'content-type': 'application/json' })
+                res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }))
+              }
+            }).catch((e) => {
+              res.writeHead(400, { 'content-type': 'application/json' })
+              res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }))
+            })
+          },
+        })
+      }
+      if (v1Cfg.voiceProvider) jsonRoute('/api/whalemaid/voice.transcribe', (body) => v1.transcribe(body, deps))
+      if (v1Cfg.visionProvider) jsonRoute('/api/whalemaid/vision.describe', (body) => v1.describeImage(body, deps))
+      ctx.logger.info(`[whalemaid] V1 增强面已挂载: voice=${v1Cfg.voiceProvider || '-'} vision=${v1Cfg.visionProvider || '-'}（BYOK，key 只存宿主）`)
+    }
+  } catch (e) {
+    ctx.logger.warn(`[whalemaid] V1 路由挂载失败: ${e instanceof Error ? e.message : String(e)}`)
   }
 
   ctx.effect(() => () => {

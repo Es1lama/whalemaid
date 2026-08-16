@@ -13,6 +13,12 @@ export interface Config {
   ratholeBin: string
   /** 中继 rathole 控制端口（默认 2333） */
   relayPort: number
+  /** V1 语音 BYOK：provider + 凭据引用名（'' = 未启用；ADR-009 使用前知情同意） */
+  voiceProvider: string
+  voiceCredentialRef: string
+  /** V1 视觉 BYOK：provider + 凭据引用名（'' = 未启用；ADR-011） */
+  visionProvider: string
+  visionCredentialRef: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -22,4 +28,8 @@ export const Config: Schema<Config> = Schema.object({
   relayFingerprint: Schema.string().default(''),
   ratholeBin: Schema.string().default('rathole'),
   relayPort: Schema.number().default(2333),
+  voiceProvider: Schema.string().default(''),
+  voiceCredentialRef: Schema.string().default(''),
+  visionProvider: Schema.string().default(''),
+  visionCredentialRef: Schema.string().default(''),
 })
