@@ -309,11 +309,11 @@ class ProxyCore(
         }
         var server: NanoWSD = newServer(FIXED_PORT)
         try {
-            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            server.start(0, false)
         } catch (e: IOException) {
             println("[WhaleMaidTunnel] 固定端口 $FIXED_PORT 被占用，回退随机端口: ${e.message}")
             server = newServer(0)
-            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            server.start(0, false)
         }
         onReady(server.listeningPort)
     }
