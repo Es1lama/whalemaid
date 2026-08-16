@@ -56,9 +56,9 @@
 
 1. ✅ **官方前端独立构建**（docs/research/spike-official-frontend.md，commit 47f9438 冻结）；
 2. ✅ **Web 版主控端**（apps/controller/web：设备管理首屏+官方 UI/API/WS 隧道反代，实测闭环）+ ✅ **PC 壳**（apps/controller/electron，smoke 过）；
-3. ⬜ Capacitor 壳 + 移动适配跑通（Android）；
-4. ⬜ 原生桥：相机/麦克风/文件（D-023）；
-5. ⬜ iOS 壳（CI macOS 构建验证）+ 三端一致回归（ADR-039）。
+3. ✅ Capacitor 壳 + 移动适配跑通（Android）：官方 UI/API/WS 真机链路、固定 origin 原生 bridge 注入、自动恢复均已验证；
+4. ◐ 原生桥（D-023）：Android 已实现相机、相册、文件与麦克风录制 API（opaque cache asset + 256 KiB 分块读取 + release；系统选择器实测）；官方 composer client module 与 iOS 对等桥待接线；
+5. ◐ iOS 壳已完成 Swift 隧道移植与 CI macOS 构建配置（commit 8f75548）；三端一致回归待完成（ADR-039）。
 
 ## 8. 已定案
 

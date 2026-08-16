@@ -8,6 +8,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // BridgeActivity 在 super.onCreate() 内创建 bridge 并加载 server.url；插件与本地代理都必须先就绪。
         registerPlugin(WhaleMaidTunnelPlugin::class.java)
+        registerPlugin(WhaleMaidNativePlugin::class.java)
         startWhaleMaidCore(
             applicationContext,
             this,
