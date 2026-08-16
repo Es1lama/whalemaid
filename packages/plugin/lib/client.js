@@ -523,15 +523,25 @@ function TemporaryAccessPanel({ wide }) {
   ] });
 }
 
+// src/client/runtime.ts
+var CONTROLLER_RUNTIME_ROLE = "controller";
+function isControllerRuntime() {
+  const runtime = globalThis;
+  return runtime.__WHALEMAID_RUNTIME_ROLE__ === CONTROLLER_RUNTIME_ROLE;
+}
+
 // src/client/index.ts
 var inject = ["slots"];
 function apply(ctx) {
-  ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
-    name: "conversation.input.left",
-    id: "whalemaid-attachments",
-    order: 10,
-    inject: attachmentInjected
-  }, AttachmentButton));
+  if (isControllerRuntime()) {
+    ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
+      name: "conversation.input.left",
+      id: "whalemaid-attachments",
+      order: 10,
+      inject: attachmentInjected
+    }, AttachmentButton));
+    return;
+  }
   ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
     name: "sidebar.footer.action",
     id: "whalemaid-temporary-access",

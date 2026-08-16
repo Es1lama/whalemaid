@@ -61,6 +61,9 @@ class ProxyCore(
          * 只在缺失时注入，不改变官方前端任何调用点（ADR-039 移动适配）。
          */
         val POLYFILL_SCRIPT = """
+            <script id="whalemaid-controller-runtime">
+            Object.defineProperty(globalThis, '__WHALEMAID_RUNTIME_ROLE__', { value: 'controller', writable: false, configurable: false });
+            </script>
             <script id="whalemaid-polyfill">
             (function () {
               if (typeof AbortSignal === 'undefined') return;
@@ -255,10 +258,10 @@ class ProxyCore(
         session.clear()
     }
 
-    /** 官方 HTML 头部注入 WebView 兼容 polyfill（幂等） */
-    private fun injectPolyfill(html: ByteArray): ByteArray {
+    /** 官方 HTML 头部注入控制端角色与 WebView 兼容 polyfill（幂等）。 */
+    internal fun injectPolyfill(html: ByteArray): ByteArray {
         val text = html.toString(Charsets.UTF_8)
-        if (text.contains("whalemaid-polyfill")) return html
+        if (text.contains("whalemaid-controller-runtime")) return html
         val idx = text.indexOf("<head")
         if (idx < 0) return html
         val insertAt = text.indexOf('>', idx) + 1

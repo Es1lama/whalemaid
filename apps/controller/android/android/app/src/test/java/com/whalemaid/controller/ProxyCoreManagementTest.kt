@@ -47,6 +47,19 @@ class ProxyCoreManagementTest {
     }
 
     @Test
+    fun officialHtmlDeclaresNonWritableControllerRuntimeBeforeDshBoot() {
+        val source = "<html><head><script>window.__DSH_BOOT__={}</script></head><body></body></html>".toByteArray()
+        val first = core().injectPolyfill(source).toString(Charsets.UTF_8)
+        val roleAt = first.indexOf("Object.defineProperty(globalThis, '__WHALEMAID_RUNTIME_ROLE__'")
+        val bootAt = first.indexOf("window.__DSH_BOOT__")
+
+        assertTrue(roleAt > first.indexOf("<head>"))
+        assertTrue(roleAt < bootAt)
+        assertTrue(first.contains("value: 'controller', writable: false, configurable: false"))
+        assertEquals(first, core().injectPolyfill(first.toByteArray()).toString(Charsets.UTF_8))
+    }
+
+    @Test
     fun relayClientIsSharedPerNormalizedAuthorityAndReleasedOnStop() {
         val core = ProxyCore(
             pinStore = object : PinStore {

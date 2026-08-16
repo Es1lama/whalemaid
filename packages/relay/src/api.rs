@@ -1,6 +1,7 @@
 // SPEC: docs/security-audit.md#SEC-001/002/003 控制面 API：安装码注册、每设备凭据、/connect 密码匹配+限速（隧道 token 注册后固定，授权在受控端网关侧）
 // SPEC: docs/threat-model.md#TM-005 心跳/在线状态/吊销
 use crate::config::RelayConfig;
+use crate::controller_http::ControllerRequestMarker;
 use crate::controller_sessions::{ControllerSessionStore, CredentialKind};
 use crate::grants::GrantStore;
 use crate::install_tokens::InstallTokenStore;
@@ -562,11 +563,36 @@ async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
     let Some(port) = state.grants.lock().await.consume(parts[1], parts[2]) else {
         return;
     };
+    let marked_request = match tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let mut marker = ControllerRequestMarker::new();
+        loop {
+            let bytes = match socket.recv().await {
+                Some(Ok(Message::Binary(data))) => data,
+                Some(Ok(Message::Text(data))) => data.into_bytes(),
+                Some(Ok(Message::Ping(data))) => {
+                    let _ = socket.send(Message::Pong(data)).await;
+                    continue;
+                }
+                _ => return None,
+            };
+            match marker.push(&bytes) {
+                Ok(Some(request)) => return Some(request),
+                Ok(None) => continue,
+                Err(_) => return None,
+            }
+        }
+    }).await {
+        Ok(Some(request)) => request,
+        _ => return,
+    };
     let Ok(mut backend) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
         return;
     };
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    if backend.write_all(&marked_request).await.is_err() {
+        return;
+    }
     // 单任务 select 双工泵（避免半连接别名借用）：ws 帧 ↔ tcp 字节
     let mut buf = [0u8; 16 * 1024];
     loop {

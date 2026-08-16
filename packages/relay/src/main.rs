@@ -1,6 +1,7 @@
 // SPEC: docs/PREFLIGHT.md 中继控制面入口
 mod api;
 mod config;
+mod controller_http;
 mod controller_sessions;
 mod grants;
 mod install_tokens;

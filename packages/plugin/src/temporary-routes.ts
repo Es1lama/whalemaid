@@ -20,6 +20,8 @@ export interface TemporaryRouteServer {
 }
 
 const CLIENT_HEADER = 'x-whalemaid-client'
+export const TRANSPORT_ROLE_HEADER = 'x-whalemaid-transport-role'
+const CONTROLLER_ROLE = 'controller'
 
 class BadRequestError extends Error {}
 
@@ -28,8 +30,14 @@ function respond(res: ResponseLike, status: number, value: unknown): void {
   res.end(JSON.stringify(value))
 }
 
+function isControllerTransport(req: RequestLike): boolean {
+  const value = req.headers[TRANSPORT_ROLE_HEADER]
+  const roles = Array.isArray(value) ? value : [value]
+  return roles.some(role => typeof role === 'string' && role.trim().toLowerCase() === CONTROLLER_ROLE)
+}
+
 function authorized(req: RequestLike): boolean {
-  return req.headers[CLIENT_HEADER] === '1'
+  return req.headers[CLIENT_HEADER] === '1' && !isControllerTransport(req)
 }
 
 function readJson(req: RequestLike): Promise<Record<string, unknown>> {

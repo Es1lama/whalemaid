@@ -64,6 +64,7 @@ class TunnelHttpTest {
             "Content-Length" to "999",
             "Upgrade" to "websocket",
             "Accept-Encoding" to "gzip",
+            "X-WhaleMaid-Transport-Role" to "host",
             "X-Custom" to "yes",
             "Content-Type" to "application/json",
         )
@@ -75,6 +76,9 @@ class TunnelHttpTest {
         assertFalse(req.contains("evil.example.com"))
         assertFalse(req.contains("Upgrade: websocket"))
         assertFalse(req.contains("Connection: keep-alive"))
+        assertFalse(req.contains("x-whalemaid-transport-role: host", ignoreCase = true))
+        assertEquals(1, Regex("(?i)x-whalemaid-transport-role:").findAll(req).count())
+        assertTrue(req.contains("x-whalemaid-transport-role: controller\r\n"))
         assertTrue(req.contains("content-length: 2\r\n"))
         assertTrue(req.endsWith("Connection: close\r\n\r\n"))
     }
@@ -134,6 +138,7 @@ class TunnelHttpTest {
         assertTrue(req.startsWith("GET /api/events.host?x=1 HTTP/1.1\r\n"))
         assertTrue(req.contains("Host: 127.0.0.1:3182\r\n"))
         assertTrue(req.contains("Origin: http://127.0.0.1:3182\r\n"))
+        assertTrue(req.contains("x-whalemaid-transport-role: controller\r\n"))
         assertTrue(req.contains("Upgrade: websocket\r\n"))
         assertTrue(req.contains("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"))
     }

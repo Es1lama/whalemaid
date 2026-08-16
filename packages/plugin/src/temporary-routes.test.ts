@@ -5,7 +5,7 @@ import type { TemporaryPasswordManager } from './temporary.js'
 
 interface CapturedRoute {
   path: string
-  handler: (req: { method?: string; headers: Record<string, string>; on: EventEmitter['on'] }, res: TestResponse) => void
+  handler: (req: { method?: string; headers: Record<string, string | string[]>; on: EventEmitter['on'] }, res: TestResponse) => void
 }
 
 interface TestResponse {
@@ -28,8 +28,8 @@ function harness() {
   const manager = { snapshot, issue, revoke } as unknown as TemporaryPasswordManager
   const dispose = registerTemporaryPasswordRoutes(server, manager, 'WHALE-TEST-0001')
 
-  const call = (path: string, method: string, body = '', headers: Record<string, string> = {}) => new Promise<{ status: number; body: Record<string, unknown> }>((resolve) => {
-    const req = new EventEmitter() as EventEmitter & { method: string; headers: Record<string, string> }
+  const call = (path: string, method: string, body = '', headers: Record<string, string | string[]> = {}) => new Promise<{ status: number; body: Record<string, unknown> }>((resolve) => {
+    const req = new EventEmitter() as EventEmitter & { method: string; headers: Record<string, string | string[]> }
     req.method = method
     req.headers = headers
     let status = 0
@@ -44,16 +44,34 @@ function harness() {
     })
   })
 
-  return { call, dispose, disposals, issue, revoke }
+  return { call, dispose, disposals, snapshot, issue, revoke }
 }
 
 const clientHeaders = { 'x-whalemaid-client': '1' }
+const controllerHeaders = { ...clientHeaders, 'x-whalemaid-transport-role': 'controller' }
 
 describe('temporary password host routes', () => {
   it('拒绝没有同源客户端 header 的请求', async () => {
     const h = harness()
     expect((await h.call('/api/whalemaid/device', 'GET')).status).toBe(403)
     expect((await h.call('/api/whalemaid/temporary-password', 'POST', '{"ttlSec":600}', { 'content-type': 'application/json' })).status).toBe(403)
+  })
+
+  it('拒绝中继标记的控制端流量且不读取或修改凭据状态', async () => {
+    const h = harness()
+
+    expect((await h.call('/api/whalemaid/device', 'GET', '', controllerHeaders)).status).toBe(403)
+    expect((await h.call('/api/whalemaid/temporary-password', 'POST', '{"ttlSec":600}', {
+      ...controllerHeaders,
+      'content-type': 'application/json',
+    })).status).toBe(403)
+    expect((await h.call('/api/whalemaid/temporary-password', 'DELETE', '', {
+      ...controllerHeaders,
+      'x-whalemaid-transport-role': ['host', 'controller'],
+    })).status).toBe(403)
+    expect(h.snapshot).not.toHaveBeenCalled()
+    expect(h.issue).not.toHaveBeenCalled()
+    expect(h.revoke).not.toHaveBeenCalled()
   })
 
   it('设备状态不暴露长期密码或本地管理 token', async () => {

@@ -14,6 +14,8 @@ object TunnelHttp {
     const val CTRL_CONFIGURE_PATH = "/_ctrl/configure"
     const val CTRL_DEVICE_PATH = "/_ctrl/device"
     const val CTRL_DISCONNECT_PATH = "/_ctrl/disconnect"
+    const val TRANSPORT_ROLE_HEADER = "x-whalemaid-transport-role"
+    const val CONTROLLER_ROLE = "controller"
 
     enum class Route { MANAGEMENT, CONNECT, CONNECT_SAVED, STATUS, STATE, CONFIGURE, DEVICE, DISCONNECT, TUNNEL }
 
@@ -82,10 +84,11 @@ object TunnelHttp {
         sb.append("Host: $hostAuthority\r\n")
         sb.append("Origin: http://$hostAuthority\r\n")
         for ((k, v) in headers) {
-            if (k.lowercase() in setOf("host", "connection", "content-length", "origin", "upgrade", "accept-encoding")) continue
+            if (k.lowercase() in setOf("host", "connection", "content-length", "origin", "upgrade", "accept-encoding", TRANSPORT_ROLE_HEADER)) continue
             sb.append("$k: $v\r\n")
         }
         if (bodyBytes != null && bodyBytes.isNotEmpty()) sb.append("content-length: ${bodyBytes.size}\r\n")
+        sb.append("$TRANSPORT_ROLE_HEADER: $CONTROLLER_ROLE\r\n")
         sb.append("Connection: close\r\n\r\n")
         return sb.toString()
     }
@@ -94,7 +97,8 @@ object TunnelHttp {
     fun buildEventsUpgradeRequest(uri: String, secWebSocketKey: String, hostAuthority: String): String {
         require(isValidHostAuthority(hostAuthority)) { "invalid host authority" }
         return "GET $uri HTTP/1.1\r\nHost: $hostAuthority\r\nOrigin: http://$hostAuthority\r\n" +
-            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: $secWebSocketKey\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            "$TRANSPORT_ROLE_HEADER: $CONTROLLER_ROLE\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
+            "Sec-WebSocket-Key: $secWebSocketKey\r\nSec-WebSocket-Version: 13\r\n\r\n"
     }
 
     /** 中继控制面端口 = server 串实际端口（TOFU 指纹必须从该端口捕获）；缺省 9080（部署默认） */

@@ -479,14 +479,21 @@ var TemporaryPasswordManager = class {
 
 // src/temporary-routes.ts
 var CLIENT_HEADER = "x-whalemaid-client";
+var TRANSPORT_ROLE_HEADER = "x-whalemaid-transport-role";
+var CONTROLLER_ROLE = "controller";
 var BadRequestError = class extends Error {
 };
 function respond(res, status, value) {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(value));
 }
+function isControllerTransport(req) {
+  const value = req.headers[TRANSPORT_ROLE_HEADER];
+  const roles = Array.isArray(value) ? value : [value];
+  return roles.some((role) => typeof role === "string" && role.trim().toLowerCase() === CONTROLLER_ROLE);
+}
 function authorized(req) {
-  return req.headers[CLIENT_HEADER] === "1";
+  return req.headers[CLIENT_HEADER] === "1" && !isControllerTransport(req);
 }
 function readJson(req) {
   return new Promise((resolve, reject) => {

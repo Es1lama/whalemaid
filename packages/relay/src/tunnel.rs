@@ -1,11 +1,12 @@
 // SPEC: docs/security-audit.md#SEC-004b 主控端隧道入口：TLS（与 API 同证书/指纹体系）→ GRANT 校验 → 转发到 127.0.0.1:<设备服务端口>
 // 加密用现成 TLS（tokio-rustls），授权用一次性 grant（grants.rs），不自造协议；转发内容仍受 rathole noise 保护
 use crate::api::AppState;
+use crate::controller_http::ControllerRequestMarker;
 use crate::limiter::Attempt;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 
@@ -69,7 +70,24 @@ async fn handle(state: Arc<AppState>, acceptor: TlsAcceptor, stream: TcpStream, 
         return Ok(());
     };
 
+    let marked_request = tokio::time::timeout(LINE_TIMEOUT, async {
+        let mut marker = ControllerRequestMarker::new();
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            let count = tls.read(&mut buf).await?;
+            if count == 0 {
+                return Err(anyhow::anyhow!("controller closed before HTTP request"));
+            }
+            if let Some(request) = marker.push(&buf[..count])? {
+                return Ok::<Vec<u8>, anyhow::Error>(request);
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("controller HTTP request timeout"))??;
+
     let mut backend = TcpStream::connect(("127.0.0.1", port)).await?;
+    backend.write_all(&marked_request).await?;
     // 双工转发：主控端 ↔ rathole 服务端口（其另一侧为受控端，noise 保护）
     let _ = tokio::io::copy_bidirectional(&mut tls, &mut backend).await?;
     Ok(())

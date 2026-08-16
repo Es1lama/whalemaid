@@ -29,6 +29,7 @@
 4. **主控端授权（SEC-002/004b）**：首次 `/_whalemaid/connect` 使用编号+密码（**失败尝试限速 5/min、错 5 次锁 5 分钟；成功验证不占窗口预算**）完成 scrypt 后，返回随机 256-bit `sessionToken`（至多 15min、可重复、绑定客户端 IP+设备）；主控端只在进程内保存该令牌，后续逐请求用它快速签单连接一次性 grant，隧道入口仍逐条消费 grant。密码只走 TLS 密文，服务端只持 PHC；Android 长期密码可按 ADR-043 在首次成功后由系统 Keystore 加密保存，WebView 与普通应用存储永远拿不到明文。临时密码和 session token 不得持久化。
 5. **临时密码（REQ-003/UX-005/007）**：受控插件凭每设备凭据提交 PHC 与 `ttlSec`，中继以自己的时钟限制 TTL 为 60..86400 秒。主控端必须显式发送 `credentialKind:"temporary"`，不得在长期/临时之间猜测或失败降级；慢哈希验证后按当前 generation 原子单次消费，换取不超过密码剩余 TTL 的临时 `sessionToken`，供官方 UI 的多资源请求重复签 grant。刷新/撤销会清临时 session 与待消费 grant；每次临时 session 换 grant 仍复核 generation 与 consumed 状态，阻断刷新竞态。临时密码过期/消费/撤销后必须重新生成，不能回退复用。
 6. 吊销即时生效：设备条目移除 → 清除该设备 `sessionToken` 与在途 grant → 隧道热重载断开 → 凭据心跳 401 → 主控端 grant 拒发；长期密码轮换同样清除会话令牌与 grant。
+7. **受控管理边界**：中继在消费有效 grant 后解析首个 HTTP/1 请求头，移除主控端自带的所有 `x-whalemaid-transport-role`，再强制写入唯一的 `controller` 角色；TLS 与 WSS 隧道入口共用同一有界解析器。受控插件的设备信息、临时密码签发/刷新/撤销路由见到该角色必须在读取或修改凭据状态前返回 403。控制 App 注入的同名请求头和页面运行时角色只用于纵深防御与 UI 分工，不能作为服务端授权依据；中继不记录请求头或业务正文。
 
 ## PROTO-004 会话通道（E2E 主通道）
 
