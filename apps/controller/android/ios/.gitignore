@@ -1,13 +1,12 @@
 App/build
 App/Pods
 App/output
-App/App/public
 DerivedData
 xcuserdata
 
 # Cordova plugins for Capacitor
 capacitor-cordova-ios-plugins
 
-# Generated Config files
-App/App/capacitor.config.json
-App/App/config.xml
+# 注：App/App/public、capacitor.config.json、config.xml 是 pbxproj 引用的构建资源，
+# CI 无本地 cap 环境时 xcodebuild 会因缺失而失败——故纳入版本控制（不再忽略），
+# CI 另跑 cap copy ios 保持 public/ 与 www/ 同步。

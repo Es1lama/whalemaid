@@ -1,0 +1,82 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>WhaleMaid 主控端</title><style>
+body{font-family:system-ui,-apple-system,'PingFang SC',sans-serif;background:#0f1115;color:#e6e8eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.card{width:min(92vw,380px);background:#181b21;border:1px solid #262a33;border-radius:14px;padding:28px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#8b93a1;font-size:13px;margin:0 0 20px}
+label{display:block;font-size:13px;color:#9aa3b2;margin:14px 0 6px}
+input{width:100%;box-sizing:border-box;background:#0f1115;border:1px solid #2c313d;color:#e6e8eb;border-radius:8px;padding:11px 12px;font-size:15px}
+input:focus{outline:none;border-color:#4c7dff}
+button{width:100%;margin-top:22px;background:#4c7dff;border:0;color:#fff;border-radius:8px;padding:12px;font-size:15px;cursor:pointer}
+button:disabled{opacity:.5}
+#status{margin-top:14px;font-size:13px;color:#8b93a1;min-height:18px;word-break:break-all}
+.err{color:#ff6b6b}
+.badge{display:inline-block;margin-left:8px;font-size:12px;border-radius:6px;padding:2px 8px;vertical-align:middle}
+.badge.on{background:#123b24;color:#4ade80}
+.badge.off{background:#3b1212;color:#f87171}
+.badge.unk{background:#262a33;color:#8b93a1}
+.sec{color:#5d6570;font-size:12px;margin-top:14px;line-height:1.6}
+.sec b{color:#8b93a1}
+</style></head><body><div class="card"><h1>WhaleMaid</h1><p class="sub">远程控制 · 设备编号 + 密码（无 IP）</p>
+<label>服务端地址（仅首次）</label><input id="server" placeholder="relay.example.com" autocomplete="off">
+<label>设备编号<span id="devbadge"></span></label><input id="device" placeholder="WHALE-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+<label>设备密码</label><input id="pw" type="password" placeholder="长期密码" autocomplete="off">
+<button id="go">连接</button><div id="status"></div>
+<div class="sec">全链加密：TLS/WSS + noise 隧道，服务器证书指纹固定（首次连接时固定，防中间人）<br>
+连接 = 对受控电脑的完整远程控制，等同你坐在电脑前。</div></div>
+<script>
+const $ = (id) => document.getElementById(id)
+const native = window.Capacitor && window.Capacitor.Plugins ? window.Capacitor.Plugins.WhaleMaidTunnel : null
+async function savedState() {
+  if (!native || !native.loadState) return {}
+  try { const r = await native.loadState(); return r || {} } catch (e) { return {} }
+}
+async function persistState(server, device, pw) {
+  if (native && native.saveState) { try { await native.saveState({ server, deviceId: device, password: pw }) } catch (e) {} }
+  try { localStorage.setItem('whalemaid-controller', JSON.stringify({ server, device })) } catch (e) {}
+}
+// UX-013：连接前在线状态徽章（设备编号输入即查，防盲试）
+let statusTimer = null
+async function refreshBadge() {
+  const server = $('server').value.trim(), device = $('device').value.trim().toUpperCase()
+  const badge = $('devbadge')
+  if (!server || !device) { badge.innerHTML = ''; return }
+  try {
+    const res = await fetch('/_ctrl/status', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, deviceId: device }) })
+    const d = await res.json()
+    if (!res.ok) { badge.innerHTML = '<span class="badge unk">状态未知</span>'; return }
+    badge.innerHTML = d.online ? '<span class="badge on">在线</span>'
+      : d.registered ? '<span class="badge off">离线</span>' : '<span class="badge unk">设备不存在</span>'
+  } catch (e) { badge.innerHTML = '<span class="badge unk">状态未知</span>' }
+}
+$('device').addEventListener('input', () => { clearTimeout(statusTimer); statusTimer = setTimeout(refreshBadge, 500) })
+$('server').addEventListener('input', () => { clearTimeout(statusTimer); statusTimer = setTimeout(refreshBadge, 500) })
+async function tryConnect(server, device, pw, auto) {
+  const st = $('status'); st.className = ''; st.textContent = auto ? '正在自动连接上次设备…' : '正在连接…'; $('go').disabled = true
+  try {
+    const res = await fetch('/_ctrl/connect', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, deviceId: device, password: pw }) })
+    const data = await res.json()
+    if (!res.ok) { st.className = 'err'; st.textContent = data.error ?? ('失败 ' + res.status); $('go').disabled = false; return false }
+    await persistState(server, device, pw)
+    st.textContent = '已连接，正在载入官方界面…'
+    location.href = '/'
+    return true
+  } catch (e) { st.className = 'err'; st.textContent = String(e); $('go').disabled = false; return false }
+}
+$('go').onclick = () => {
+  tryConnect($('server').value.trim(), $('device').value.trim().toUpperCase(), $('pw').value, false)
+}
+;(async () => {
+  const s = await savedState()
+  if (s.server && s.deviceId && s.password) {
+    $('server').value = s.server; $('device').value = s.deviceId; $('pw').value = s.password
+    tryConnect(s.server, s.deviceId, s.password, true)
+    return
+  }
+  const saved = JSON.parse(localStorage.getItem('whalemaid-controller') ?? '{}')
+  $('server').value = saved.server ?? ''
+  $('device').value = saved.device ?? ''
+  refreshBadge()
+})()
+</script></body></html>
