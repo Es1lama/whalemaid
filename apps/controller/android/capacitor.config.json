@@ -7,6 +7,7 @@
     "captureInput": true
   },
   "server": {
+    "url": "http://127.0.0.1:43969",
     "androidScheme": "https",
     "cleartext": true,
     "allowNavigation": [

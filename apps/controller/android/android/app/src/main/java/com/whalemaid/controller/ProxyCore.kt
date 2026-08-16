@@ -222,7 +222,7 @@ class ProxyCore(
     }
 
     /** 启动本地代理；onReady 回调端口（Android 侧负责把 WebView 指向 http://127.0.0.1:<port>/） */
-    fun start(onReady: (Int) -> Unit) {
+    fun start(fallbackToRandomPort: Boolean = true, onReady: (Int) -> Unit) {
         fun newServer(port: Int): NanoWSD = object : NanoWSD(port) {
             override fun openWebSocket(handshake: IHTTPSession): NanoWSD.WebSocket? {
                 if (handshake.uri.startsWith("/api/events")) {
@@ -323,6 +323,7 @@ class ProxyCore(
         try {
             server.start(0, false)
         } catch (e: IOException) {
+            if (!fallbackToRandomPort) throw e
             println("[WhaleMaidTunnel] 固定端口 $FIXED_PORT 被占用，回退随机端口: ${e.message}")
             server = newServer(0)
             server.start(0, false)

@@ -43,6 +43,7 @@
 - 授权全部在中继侧：`/_whalemaid/connect`（编号+密码验证，限速/锁定）→ 单连接一次性 grant → TLS/WSS 隧道入口消费；
 - 主控端（apps/controller/web）把浏览器请求改写为**受控端宿主权威**并经隧道转发——官方信任栅栏放行同源请求（403 拒绝跨站，DNS-rebinding 防御）；
 - **前端代码不改任何调用点**——官方 UI 继续同源调 `/api` 与 WS `/api/events.mux|host`，只是承载从"本机"变为"隧道"。
+- Android 把固定本地代理 `http://127.0.0.1:43969` 配为 Capacitor `server.url`，并在 `BridgeActivity` 创建 WebView 前完成监听；该固定 origin 是 Capacitor 原生插件注入官方页面的前提，应用路径禁止随机端口回退。
 
 ## 6. 废止与清理（ADR-041/audit#3）
 

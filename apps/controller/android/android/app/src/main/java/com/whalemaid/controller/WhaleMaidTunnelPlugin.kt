@@ -28,7 +28,13 @@ class WhaleMaidTunnelPlugin : Plugin() {
 }
 
 /** 启动代理核心并把 WebView 指向本地代理（同源 = 页面相对请求全走隧道）；MainActivity 与插件共用 */
-fun startWhaleMaidCore(context: Context, activity: Activity?, onReady: (Int) -> Unit) {
+fun startWhaleMaidCore(
+    context: Context,
+    activity: Activity?,
+    navigateWebView: Boolean = true,
+    fallbackToRandomPort: Boolean = true,
+    onReady: (Int) -> Unit,
+) {
     val prefs = context.getSharedPreferences("whalemaid-tunnel", Context.MODE_PRIVATE)
     val state = context.getSharedPreferences("whalemaid-state", Context.MODE_PRIVATE)
     val core = ProxyCore(
@@ -51,10 +57,12 @@ fun startWhaleMaidCore(context: Context, activity: Activity?, onReady: (Int) -> 
                 .commit()) { "无法保存登录状态" }
         },
     )
-    core.start { port ->
+    core.start(fallbackToRandomPort) { port ->
         onReady(port)
-        activity?.runOnUiThread {
-            (activity as? BridgeActivity)?.bridge?.webView?.loadUrl("http://127.0.0.1:$port/")
+        if (navigateWebView) {
+            activity?.runOnUiThread {
+                (activity as? BridgeActivity)?.bridge?.webView?.loadUrl("http://127.0.0.1:$port/")
+            }
         }
     }
 }
