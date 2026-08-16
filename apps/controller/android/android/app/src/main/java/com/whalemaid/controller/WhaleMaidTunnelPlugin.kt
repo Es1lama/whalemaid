@@ -2,7 +2,6 @@ package com.whalemaid.controller
 
 import android.app.Activity
 import android.content.Context
-import android.content.SharedPreferences
 import com.getcapacitor.BridgeActivity
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -31,6 +30,7 @@ class WhaleMaidTunnelPlugin : Plugin() {
 /** 启动代理核心并把 WebView 指向本地代理（同源 = 页面相对请求全走隧道）；MainActivity 与插件共用 */
 fun startWhaleMaidCore(context: Context, activity: Activity?, onReady: (Int) -> Unit) {
     val prefs = context.getSharedPreferences("whalemaid-tunnel", Context.MODE_PRIVATE)
+    val state = context.getSharedPreferences("whalemaid-state", Context.MODE_PRIVATE)
     val core = ProxyCore(
         pinStore = object : PinStore {
             override fun get(key: String): String? = prefs.getString(key, null)
@@ -39,6 +39,16 @@ fun startWhaleMaidCore(context: Context, activity: Activity?, onReady: (Int) -> 
         pageHtml = {
             runCatching { activity?.assets?.open("public/index.html")?.use { String(it.readBytes()) } }
                 .getOrNull() ?: "<html><body>WhaleMaid</body></html>"
+        },
+        initialServer = state.getString("server", "") ?: "",
+        initialDeviceId = state.getString("deviceId", "") ?: "",
+        initialPassword = state.getString("password", "") ?: "",
+        onAuthenticated = { server, deviceId, password ->
+            check(state.edit()
+                .putString("server", server)
+                .putString("deviceId", deviceId)
+                .putString("password", password)
+                .commit()) { "无法保存登录状态" }
         },
     )
     core.start { port ->

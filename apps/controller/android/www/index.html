@@ -17,19 +17,28 @@ button:disabled{opacity:.5}
 <button id="go">连接</button><div id="status"></div></div>
 <script>
 const $ = (id) => document.getElementById(id)
+// 密码由 Kotlin 代理核心在连接认证成功后写入应用私有 SharedPreferences；页面只记非敏感回填项。
+function persistState(server, device) {
+  try { localStorage.setItem('whalemaid-controller', JSON.stringify({ server, device })) } catch (e) {}
+}
+async function tryConnect(server, device, pw, auto) {
+  const st = $('status'); st.className = ''; st.textContent = auto ? '正在自动连接上次设备…' : '正在连接…'; $('go').disabled = true
+  try {
+    const res = await fetch('/_ctrl/connect', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, deviceId: device, password: pw }) })
+    const data = await res.json()
+    if (!res.ok) { st.className = 'err'; st.textContent = data.error ?? ('失败 ' + res.status); $('go').disabled = false; return false }
+    persistState(server, device)
+    st.textContent = '已连接，正在载入官方界面…'
+    location.href = '/'
+    return true
+  } catch (e) { st.className = 'err'; st.textContent = String(e); $('go').disabled = false; return false }
+}
+$('go').onclick = () => {
+  tryConnect($('server').value.trim(), $('device').value.trim().toUpperCase(), $('pw').value, false)
+}
+// 无原生会话时才会看到管理页；固定端口让非敏感回填项跨启动保留。
 const saved = JSON.parse(localStorage.getItem('whalemaid-controller') ?? '{}')
 $('server').value = saved.server ?? ''
 $('device').value = saved.device ?? ''
-$('go').onclick = async () => {
-  const st = $('status'); st.className = ''; st.textContent = '正在连接…'; $('go').disabled = true
-  try {
-    const res = await fetch('/_ctrl/connect', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ server: $('server').value.trim(), deviceId: $('device').value.trim().toUpperCase(), password: $('pw').value }) })
-    const data = await res.json()
-    if (!res.ok) { st.className = 'err'; st.textContent = data.error ?? ('失败 ' + res.status); $('go').disabled = false; return }
-    localStorage.setItem('whalemaid-controller', JSON.stringify({ server: $('server').value.trim(), device: $('device').value.trim().toUpperCase() }))
-    st.textContent = '已连接，正在载入官方界面…'
-    location.href = '/'
-  } catch (e) { st.className = 'err'; st.textContent = String(e); $('go').disabled = false }
-}
 </script></body></html>

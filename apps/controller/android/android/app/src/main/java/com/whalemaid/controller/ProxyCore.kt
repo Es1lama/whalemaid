@@ -45,9 +45,15 @@ interface PinStore {
 class ProxyCore(
     private val pinStore: PinStore,
     private val pageHtml: () -> String,
+    initialServer: String = "",
+    initialDeviceId: String = "",
+    initialPassword: String = "",
+    private val onAuthenticated: (server: String, deviceId: String, password: String) -> Unit = { _, _, _ -> },
 ) {
     companion object {
         const val MAX_BODY = 64L * 1024 * 1024
+        /** 固定本地代理端口：保证 WebView origin 稳定（localStorage/登录状态跨启动保留）；被占用时回退随机端口 */
+        const val FIXED_PORT = 43969
 
         /**
          * 移动适配层 polyfill：官方前端用 AbortSignal.any/timeout（Chrome 116+），
@@ -83,8 +89,13 @@ class ProxyCore(
         """.trimIndent()
     }
 
-    data class Session(var server: String = "", var deviceId: String = "", var password: String = "")
-    val session = Session()
+    class Session(
+        @Volatile var server: String = "",
+        @Volatile var deviceId: String = "",
+        @Volatile var password: String = "",
+        @Volatile var authToken: String = "",
+    )
+    val session = Session(initialServer, initialDeviceId, initialPassword)
 
     private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -162,10 +173,29 @@ class ProxyCore(
         return (text.substring(0, insertAt) + POLYFILL_SCRIPT + text.substring(insertAt)).toByteArray(Charsets.UTF_8)
     }
 
-    fun tunnelExchange(httpHead: String, bodyBytes: ByteArray?): ByteArray {        val (code, body) = relayRequest(session.server, "/_whalemaid/connect", "POST",
-            """{"deviceId":"${session.deviceId}","password":"${session.password}"}""")
+    /** 首次以密码认证，之后只在当前进程内复用短期 sessionToken；令牌过期时自动回退一次密码。 */
+    fun requestGrant(): String {
+        fun exchange(useToken: Boolean): Pair<Int, String> {
+            val payload = JSONObject().put("deviceId", session.deviceId)
+            if (useToken) payload.put("sessionToken", session.authToken) else payload.put("password", session.password)
+            return relayRequest(session.server, "/_whalemaid/connect", "POST", payload.toString())
+        }
+        val usedToken = session.authToken.isNotEmpty()
+        var response = exchange(usedToken)
+        if (usedToken && response.first == 401) {
+            session.authToken = ""
+            response = exchange(false)
+        }
+        val (code, body) = response
         if (code != 200) throw IOException("connect $code: $body")
-        val grant = JSONObject(body).getString("grant")
+        val json = JSONObject(body)
+        val issuedToken = json.optString("sessionToken")
+        if (issuedToken.isNotEmpty()) session.authToken = issuedToken
+        return json.getString("grant")
+    }
+
+    fun tunnelExchange(httpHead: String, bodyBytes: ByteArray?): ByteArray {
+        val grant = requestGrant()
 
         val out = ByteArrayOutputStream()
         val latch = CountDownLatch(1)
@@ -193,7 +223,7 @@ class ProxyCore(
 
     /** 启动本地代理；onReady 回调端口（Android 侧负责把 WebView 指向 http://127.0.0.1:<port>/） */
     fun start(onReady: (Int) -> Unit) {
-        val server = object : NanoWSD(0) {
+        fun newServer(port: Int): NanoWSD = object : NanoWSD(port) {
             override fun openWebSocket(handshake: IHTTPSession): NanoWSD.WebSocket? {
                 if (handshake.uri.startsWith("/api/events")) {
                     println("[WhaleMaidTunnel] 事件WS握手 uri=${handshake.uri} hdrs=${handshake.headers.keys.joinToString(",")}")
@@ -230,9 +260,11 @@ class ProxyCore(
                             val st = JSONObject(respBody)
                             if (!st.optBoolean("registered")) return jsonResponse(404, """{"error":"设备编号不存在"}""")
                             if (!st.optBoolean("online")) return jsonResponse(503, """{"error":"设备不在线（受控端未开启或已离线）"}""")
-                            val (authCode, _) = relayRequest(serverAddr, "/_whalemaid/connect", "POST",
-                                """{"deviceId":"$deviceId","password":"$password"}""")
+                            val authPayload = JSONObject().put("deviceId", deviceId).put("password", password)
+                            val (authCode, authBody) = relayRequest(serverAddr, "/_whalemaid/connect", "POST", authPayload.toString())
                             if (authCode != 200) return jsonResponse(401, """{"error":"密码错误"}""")
+                            this@ProxyCore.session.authToken = JSONObject(authBody).optString("sessionToken")
+                            onAuthenticated(serverAddr, deviceId, password)
                             jsonResponse(200, """{"ok":true}""")
                         }
                         TunnelHttp.Route.TUNNEL -> {
@@ -275,7 +307,14 @@ class ProxyCore(
             private fun jsonResponse(status: Int, body: String): NanoHTTPD.Response =
                 NanoHTTPD.newFixedLengthResponse(NanoStatus.of(status), "application/json; charset=utf-8", body)
         }
-        server.start(0, false)
+        var server: NanoWSD = newServer(FIXED_PORT)
+        try {
+            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+        } catch (e: IOException) {
+            println("[WhaleMaidTunnel] 固定端口 $FIXED_PORT 被占用，回退随机端口: ${e.message}")
+            server = newServer(0)
+            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+        }
         onReady(server.listeningPort)
     }
 
@@ -334,10 +373,7 @@ class ProxyCore(
             val t0 = System.currentTimeMillis()
             Thread {
                 try {
-                    val (code, body) = relayRequest(session.server, "/_whalemaid/connect", "POST",
-                        """{"deviceId":"${session.deviceId}","password":"${session.password}"}""")
-                    if (code != 200) { println("[WhaleMaidTunnel] 事件桥connect失败 $code"); close(CloseCode.InternalServerError, "grant failed", false); return@Thread }
-                    val grant = JSONObject(body).getString("grant")
+                    val grant = proxy.requestGrant()
                     up = clientFor(session.server).newWebSocket(
                         Request.Builder().url("wss://${session.server}/_whalemaid/tunnel-ws").build(),
                         object : WebSocketListener() {

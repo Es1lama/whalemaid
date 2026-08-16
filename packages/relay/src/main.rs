@@ -1,6 +1,7 @@
 // SPEC: docs/PREFLIGHT.md 中继控制面入口
 mod api;
 mod config;
+mod controller_sessions;
 mod grants;
 mod limiter;
 mod rathole;
@@ -67,9 +68,11 @@ async fn main() -> Result<()> {
         admin_token,
         install_code,
         limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
+        password_verify_slots: tokio::sync::Semaphore::new(8),
         ws_limiter: Mutex::new(limiter::Limiter::new(600, Duration::from_secs(60), 600, Duration::from_secs(60))),
         noise_private_key,
         noise_public_key,
+        controller_sessions: Mutex::new(controller_sessions::ControllerSessionStore::new(Duration::from_secs(900))),
         grants: Mutex::new(grants::GrantStore::new(Duration::from_secs(120))),
         trusted_proxy,
         max_devices,

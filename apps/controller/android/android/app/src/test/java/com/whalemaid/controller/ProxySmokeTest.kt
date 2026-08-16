@@ -52,7 +52,7 @@ class ProxySmokeTest {
 
                 // 2. 连接
                 val (c2, b2) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"W4saWTTZM4Mr"}""")
-                results += if (c2 == 200 && b2.contains("ok")) "PASS connect $b2" else "FAIL connect $c2 $b2"
+                results += if (c2 == 200 && b2.contains("ok") && core.session.authToken.isNotEmpty()) "PASS connect + sessionToken" else "FAIL connect $c2 token=${core.session.authToken.isNotEmpty()} $b2"
 
                 // 3. 已连接 GET / → 隧道官方 UI（含 WebView 兼容 polyfill 注入）
                 val (c3, b3) = get("/")

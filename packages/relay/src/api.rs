@@ -1,10 +1,11 @@
 // SPEC: docs/security-audit.md#SEC-001/002/003 控制面 API：安装码注册、每设备凭据、/connect 密码匹配+限速（隧道 token 注册后固定，授权在受控端网关侧）
 // SPEC: docs/threat-model.md#TM-005 心跳/在线状态/吊销
 use crate::config::RelayConfig;
+use crate::controller_sessions::ControllerSessionStore;
 use crate::grants::GrantStore;
 use crate::limiter::{Attempt, Limiter};
 use crate::rathole::{render_server_config, RatholeSidecar};
-use crate::registry::Registry;
+use crate::registry::{verify_password, Registry};
 use axum::{
     extract::connect_info::ConnectInfo,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -17,7 +18,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 
 pub const HEARTBEAT_TIMEOUT_SECS: u64 = 45;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub install_code: String,
     /// /connect 限速与锁定（SEC-002）
     pub limiter: Mutex<Limiter>,
+    /// scrypt 验证并发上限：验证在 blocking 池执行，但不能让攻击请求无限占用 CPU/内存。
+    pub password_verify_slots: Semaphore,
     /// WSS 隧道入口泛洪上限（宽松；grant 单次消费+TLL 已防滥用，逐请求建连是合法高频）
     pub ws_limiter: Mutex<Limiter>,
     /// 仅在显式配置可信反代时解析 X-Forwarded-For（审计三轮#2：默认用 socket peer IP）
@@ -41,6 +44,8 @@ pub struct AppState {
     /// rathole noise 静态密钥对（SEC-001/003）：private 只进配置文件；public 经 /tunnel 下发受控端 pin
     pub noise_private_key: String,
     pub noise_public_key: String,
+    /// 主控端短期认证会话（SEC-002）：只在内存，绑定 IP + 设备，密码轮换/吊销清除。
+    pub controller_sessions: Mutex<ControllerSessionStore>,
     /// 主控端一次性连接 grant（SEC-004b）
     pub grants: Mutex<GrantStore>,
 }
@@ -126,39 +131,93 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
     }))))
 }
 
-/// SEC-002：主控端连接——设备编号+密码；限速/锁定。
-/// SEC-003（Codex 审计修复）：只做密码验证与寻址，**不轮换隧道 token**（token 是受控端侧固定凭据）；
-/// SEC-004b：成功后签发**短时一次性 grant**（2min、单次消费），主控端凭 grant 走 TLS 隧道入口进入 rathole 隧道；
-/// 响应**不含设备服务端口**（路由秘密不外泄），只给隧道入口端口（与 API 同主机）。
+/// SEC-002：首次用设备编号+密码做 scrypt，签 15min 主控会话；后续凭会话令牌快速认证。
+/// SEC-003：只做主控授权与寻址，**不轮换隧道 token**（token 是受控端侧固定凭据）。
+/// SEC-004b：每次认证后仍签发**短时一次性 grant**（2min、单次消费）；响应不含设备服务端口。
 async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let password = b.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if device_id.is_empty() || password.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "deviceId/password required" }))))
+    let supplied_session = b.get("sessionToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if device_id.is_empty() || (password.is_empty() == supplied_session.is_empty()) {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "deviceId and exactly one of password/sessionToken required" }))))
     }
     let ip = client_ip(&s, &headers, Some(peer));
-    let key = format!("{ip}:{device_id}");
-    match s.limiter.lock().await.check(&key) {
-        Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" })))),
-        Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "locked" })))),
-        Attempt::Allowed => {}
-    }
-    let (service, port) = {
-        let reg = s.registry.lock().await;
-        let Some(dev) = reg.verify_device_password(&device_id, &password) else {
-            drop(reg);
+
+    let (service, port, session_token) = if !supplied_session.is_empty() {
+        let key = format!("session-token:{ip}:{device_id}");
+        match s.limiter.lock().await.check(&key) {
+            Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" })))),
+            Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "locked" })))),
+            Attempt::Allowed => {}
+        }
+        let valid = s.controller_sessions.lock().await.validate(&supplied_session, &device_id, &ip);
+        let route = if valid {
+            let reg = s.registry.lock().await;
+            let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port));
+            found
+        } else {
+            None
+        };
+        let Some((service, port)) = route else {
+            s.limiter.lock().await.record_fail(&key);
+            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong session token or unknown device" }))))
+        };
+        s.limiter.lock().await.record_success(&key);
+        (service, port, supplied_session)
+    } else {
+        let key = format!("{ip}:{device_id}");
+        match s.limiter.lock().await.check(&key) {
+            Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" })))),
+            Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "locked" })))),
+            Attempt::Allowed => {}
+        }
+        // scrypt 是慢 CPU 任务：只在短锁内复制候选记录，验证放 blocking 池并限并发。
+        let candidate = {
+            let reg = s.registry.lock().await;
+            let found = reg.active()
+                .find(|dev| dev.id == device_id)
+                .map(|dev| (dev.password_digest.clone(), dev.service.clone(), dev.port));
+            found
+        };
+        let Some((password_digest, service, port)) = candidate else {
             s.limiter.lock().await.record_fail(&key);
             return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong password or unknown device" }))))
         };
-        (dev.service.clone(), dev.port)
+        let permit = s.password_verify_slots.acquire().await.map_err(|_| (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "password verifier unavailable" })),
+        ))?;
+        let password_for_verify = password.clone();
+        let digest_for_verify = password_digest.clone();
+        let verified = tokio::task::spawn_blocking(move || verify_password(&password_for_verify, &digest_for_verify))
+            .await
+            .unwrap_or(false);
+        drop(permit);
+        // 验证期间可能发生吊销或密码轮换；签会话前确认候选记录仍是当前值。
+        let still_current = {
+            let reg = s.registry.lock().await;
+            let current = reg.active().any(|dev| dev.id == device_id && dev.password_digest == password_digest);
+            current
+        };
+        if !verified || !still_current {
+            s.limiter.lock().await.record_fail(&key);
+            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong password or unknown device" }))))
+        }
+        s.limiter.lock().await.record_success(&key);
+        let token = Uuid::new_v4().simple().to_string();
+        s.controller_sessions.lock().await.issue(token.clone(), device_id.clone(), ip.clone());
+        (service, port, token)
     };
-    s.limiter.lock().await.record_success(&key);
-    // SEC-004b：一次性 grant（TTL 2min）；隧道入口端口从配置解析
+
     let grant = Uuid::new_v4().simple().to_string();
     s.grants.lock().await.issue(grant.clone(), device_id.clone(), port);
     let tunnel_port = s.config.tunnel_listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(9443);
-    Ok((StatusCode::OK, Json(json!({ "deviceId": device_id, "service": service, "grant": grant, "grantTtlSec": 120, "tunnelPort": tunnel_port }))))
+    Ok((StatusCode::OK, Json(json!({
+        "deviceId": device_id, "service": service,
+        "sessionToken": session_token, "sessionTtlSec": 900,
+        "grant": grant, "grantTtlSec": 120, "tunnelPort": tunnel_port,
+    }))))
 }
 
 /// 密码轮换（审计三轮#3）：每设备凭据鉴权，原子替换 PHC 并吊销该设备在途 grant——旧密码立即失效
@@ -177,6 +236,7 @@ async fn update_password(State(s): State<Arc<AppState>>, headers: HeaderMap, axu
     if !updated {
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))
     }
+    s.controller_sessions.lock().await.clear_device(&id);
     s.grants.lock().await.clear_device(&id);
     Ok((StatusCode::OK, Json(json!({ "ok": true }))))
 }
@@ -255,6 +315,10 @@ async fn revoke(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::extrac
         return Err(unauthorized())
     }
     let found = s.registry.lock().await.revoke(&id);
+    if found {
+        s.controller_sessions.lock().await.clear_device(&id);
+        s.grants.lock().await.clear_device(&id);
+    }
     reload_config(&s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
     Ok((StatusCode::OK, Json(json!({ "revoked": found }))))
 }
@@ -275,22 +339,18 @@ async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
     // 首帧 = GRANT 行（10s 超时）
     let grant_line = match tokio::time::timeout(std::time::Duration::from_secs(10), socket.recv()).await {
         Ok(Some(Ok(Message::Text(t)))) => t,
-        other => { eprintln!("[ws-tunnel] 首帧异常: {other:?}"); return }
+        _ => return,
     };
     let parts: Vec<&str> = grant_line.split_whitespace().collect();
     if parts.len() != 3 || parts[0] != "GRANT" {
-        eprintln!("[ws-tunnel] 首帧非 GRANT 行: {grant_line:?}");
         return;
     }
     let Some(port) = state.grants.lock().await.consume(parts[1], parts[2]) else {
-        eprintln!("[ws-tunnel] grant 校验失败 device={}", parts[2]);
         return;
     };
     let Ok(mut backend) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
-        eprintln!("[ws-tunnel] 后端连接失败 port={port}");
         return;
     };
-    eprintln!("[ws-tunnel] 会话建立 port={port}");
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // 单任务 select 双工泵（避免半连接别名借用）：ws 帧 ↔ tcp 字节
@@ -302,16 +362,16 @@ async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
                     Some(Ok(Message::Binary(d))) => backend.write_all(&d).await,
                     Some(Ok(Message::Text(d))) => backend.write_all(d.as_bytes()).await,
                     Some(Ok(Message::Ping(_))) => { let _ = socket.send(Message::Pong(vec![])).await; continue }
-                    Some(Ok(Message::Close(_))) | None => { eprintln!("[ws-tunnel] 客户端关闭帧/断开 port={port}"); break }
-                    _ => { eprintln!("[ws-tunnel] 未知消息 port={port}"); break }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => break,
                 };
-                if r.is_err() { eprintln!("[ws-tunnel] 写后端失败 port={port}"); break }
+                if r.is_err() { break }
             }
             n = backend.read(&mut buf) => {
                 match n {
-                    Ok(0) => { eprintln!("[ws-tunnel] 后端关闭 port={port}"); break }
-                    Ok(n) => { if socket.send(Message::Binary(buf[..n].to_vec())).await.is_err() { eprintln!("[ws-tunnel] 写客户端失败 port={port}"); break } }
-                    Err(e) => { eprintln!("[ws-tunnel] 后端读失败 port={port}: {e}"); break }
+                    Ok(0) => break,
+                    Ok(n) => { if socket.send(Message::Binary(buf[..n].to_vec())).await.is_err() { break } }
+                    Err(_) => break,
                 }
             }
         }
