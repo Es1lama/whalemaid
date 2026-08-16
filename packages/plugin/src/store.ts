@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { generateDeviceId, generatePassword } from './device.js'
 
 export interface StoreState {
@@ -17,13 +17,33 @@ export interface StoreState {
   adminToken: string
 }
 
+export interface StoreOptions {
+  /** 显式数据目录用于受控部署；设置后高于 profile 默认目录。 */
+  dataDir?: string
+  /** DSH loader 为当前 profile 配置目录提供的 file URL（ctx.baseUrl）。 */
+  profileBaseUrl?: string | URL
+}
+
+function resolveDataDir(options: StoreOptions): string {
+  if (options.dataDir) return options.dataDir
+  if (!options.profileBaseUrl) {
+    throw new Error('WhaleMaid 身份缺少 profileBaseUrl：拒绝回退到共享 DSH_HOME；请由 DSH loader 提供 ctx.baseUrl 或显式配置 dataDir')
+  }
+  const profileUrl = options.profileBaseUrl instanceof URL
+    ? options.profileBaseUrl
+    : new URL(options.profileBaseUrl)
+  if (profileUrl.protocol !== 'file:') {
+    throw new Error(`WhaleMaid profileBaseUrl 必须是 file: URL，收到 ${profileUrl.protocol}`)
+  }
+  return join(fileURLToPath(profileUrl), 'whalemaid')
+}
+
 export class Store {
   private state: StoreState
   private path: string
 
-  constructor(dataDir?: string) {
-    // 默认随 DSH_HOME 走（profile 隔离），无 DSH_HOME 时退回 ~/.dsh/whalemaid
-    const base = dataDir || join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'whalemaid')
+  constructor(options: StoreOptions) {
+    const base = resolveDataDir(options)
     this.path = join(base, 'store.json')
     mkdirSync(base, { recursive: true })
     this.state = existsSync(this.path)

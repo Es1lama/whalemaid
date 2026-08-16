@@ -2,7 +2,7 @@
 import Schema from '@deepseek-ai/schemastery'
 
 export interface Config {
-  /** 数据目录：设备编号/长期密码/中继凭据。默认随 DSH_HOME/whalemaid */
+  /** 数据目录：设备编号/长期密码/中继凭据。空值时使用当前 DSH profile 下的 whalemaid 目录 */
   dataDir: string
   /** 中继接入（'' = 未启用，见 docs/deploy-server.md） */
   relayUrl: string

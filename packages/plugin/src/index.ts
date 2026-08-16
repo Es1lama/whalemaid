@@ -30,7 +30,8 @@ const DEFAULTS: Config = {
 
 export function apply(ctx: Context, config?: Config): void {
   const resolved = { ...DEFAULTS, ...config }
-  const store = new Store(resolved.dataDir)
+  const profileBaseUrl = (ctx as unknown as { baseUrl?: string | URL }).baseUrl
+  const store = new Store({ dataDir: resolved.dataDir, profileBaseUrl })
 
   // audit#3（D-022 原生同源透传）：宿主自带的 web 服务就是官方 /api + WS 下联 + 前端 UI 的唯一载体——
   // 隧道 local_addr 直指该端口，受控端不重造任何 RPC（实测：POST /api/session.list 官方信封 200）

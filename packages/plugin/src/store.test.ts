@@ -2,13 +2,22 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { generateDeviceId, generatePassword } from './device.js'
 import { Store } from './store.js'
 
 /** 测试隔离：临时目录，不碰真实 ~/.dsh */
+function tempDir(prefix = 'whalemaid-test-'): string {
+  return mkdtempSync(join(tmpdir(), prefix))
+}
+
+function profileUrl(profileDir: string): string {
+  return `${pathToFileURL(profileDir).href}/`
+}
+
 function testStore(): Store {
-  return new Store(mkdtempSync(join(tmpdir(), 'whalemaid-test-')))
+  return new Store({ dataDir: tempDir() })
 }
 
 describe('generateDeviceId', () => {
@@ -32,13 +41,45 @@ describe('Store', () => {
     expect(store.longPassword).toHaveLength(12)
   })
 
-  it('中继凭据持久化（SEC-001）', () => {
-    const store = testStore()
-    expect(store.relayCredential).toBe('')
+  it('同一 profile 重启保持设备编号、密码和中继凭据（D-032）', () => {
+    const profile = profileUrl(tempDir('whalemaid-profile-a-'))
+    const store = new Store({ profileBaseUrl: profile })
     store.setRelayCredential('cred-123')
-    // 重新加载同一目录（等价重启）仍可读回
-    const again = new Store(store.file.replace(/store\.json$/, ''))
+
+    const again = new Store({ profileBaseUrl: profile })
+    expect(again.deviceId).toBe(store.deviceId)
+    expect(again.longPassword).toBe(store.longPassword)
     expect(again.relayCredential).toBe('cred-123')
+  })
+
+  it('不同 profile 使用彼此独立的身份目录（D-032）', () => {
+    const first = new Store({ profileBaseUrl: profileUrl(tempDir('whalemaid-profile-a-')) })
+    const second = new Store({ profileBaseUrl: profileUrl(tempDir('whalemaid-profile-b-')) })
+    first.setRelayCredential('credential-a')
+
+    expect(second.deviceId).not.toBe(first.deviceId)
+    expect(second.longPassword).not.toBe(first.longPassword)
+    expect(second.relayCredential).toBe('')
+    expect(first.file).not.toBe(second.file)
+  })
+
+  it('显式 dataDir 高于 profile 默认目录（D-032）', () => {
+    const dataDir = tempDir('whalemaid-explicit-')
+    const first = new Store({ dataDir, profileBaseUrl: profileUrl(tempDir('whalemaid-profile-a-')) })
+    first.setRelayCredential('explicit-credential')
+
+    const second = new Store({ dataDir, profileBaseUrl: profileUrl(tempDir('whalemaid-profile-b-')) })
+    expect(second.deviceId).toBe(first.deviceId)
+    expect(second.relayCredential).toBe('explicit-credential')
+    expect(second.file).toBe(join(dataDir, 'store.json'))
+  })
+
+  it('没有显式目录或 profile 归属时拒绝创建共享身份（D-032）', () => {
+    expect(() => new Store({})).toThrow(/profileBaseUrl/)
+  })
+
+  it('拒绝把非 file URL 当成 profile 目录（D-032）', () => {
+    expect(() => new Store({ profileBaseUrl: 'https://example.invalid/profile/' })).toThrow(/file:/)
   })
 
   it('重生成密码清凭据触发重注册（REQ-002）', () => {

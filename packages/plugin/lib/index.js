@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 // src/device.ts
 import { randomBytes } from "node:crypto";
@@ -31,11 +31,22 @@ function generatePassword() {
 }
 
 // src/store.ts
+function resolveDataDir(options) {
+  if (options.dataDir) return options.dataDir;
+  if (!options.profileBaseUrl) {
+    throw new Error("WhaleMaid \u8EAB\u4EFD\u7F3A\u5C11 profileBaseUrl\uFF1A\u62D2\u7EDD\u56DE\u9000\u5230\u5171\u4EAB DSH_HOME\uFF1B\u8BF7\u7531 DSH loader \u63D0\u4F9B ctx.baseUrl \u6216\u663E\u5F0F\u914D\u7F6E dataDir");
+  }
+  const profileUrl = options.profileBaseUrl instanceof URL ? options.profileBaseUrl : new URL(options.profileBaseUrl);
+  if (profileUrl.protocol !== "file:") {
+    throw new Error(`WhaleMaid profileBaseUrl \u5FC5\u987B\u662F file: URL\uFF0C\u6536\u5230 ${profileUrl.protocol}`);
+  }
+  return join(fileURLToPath(profileUrl), "whalemaid");
+}
 var Store = class {
   state;
   path;
-  constructor(dataDir) {
-    const base = dataDir || join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "whalemaid");
+  constructor(options) {
+    const base = resolveDataDir(options);
     this.path = join(base, "store.json");
     mkdirSync(base, { recursive: true });
     this.state = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) : {
@@ -522,7 +533,8 @@ var DEFAULTS = {
 };
 function apply(ctx, config) {
   const resolved = { ...DEFAULTS, ...config };
-  const store = new Store(resolved.dataDir);
+  const profileBaseUrl = ctx.baseUrl;
+  const store = new Store({ dataDir: resolved.dataDir, profileBaseUrl });
   const hostWeb = ctx.webServer;
   if (resolved.relayUrl && !resolved.relayFingerprint) {
     ctx.logger.error("[whalemaid] \u914D\u7F6E\u4E86 relayUrl \u4F46\u7F3A\u5C11 relayFingerprint\uFF1A\u62D2\u7EDD\u63A5\u5165\u4E2D\u7EE7\uFF08SEC-001\uFF0C\u9632\u4E2D\u95F4\u4EBA\uFF09\u2014\u2014\u6307\u7EB9\u89C1\u670D\u52A1\u7AEF\u542F\u52A8\u65E5\u5FD7");
