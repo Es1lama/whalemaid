@@ -9,8 +9,9 @@
     "build": "cap sync android && cd android && ./gradlew assembleDebug"
   },
   "devDependencies": {
+    "@capacitor/android": "^6.2.0",
     "@capacitor/cli": "^6.2.0",
     "@capacitor/core": "^6.2.0",
-    "@capacitor/android": "^6.2.0"
+    "@capacitor/ios": "^6.2.1"
   }
 }

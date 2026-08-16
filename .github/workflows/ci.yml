@@ -29,3 +29,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --manifest-path packages/relay/Cargo.toml
       - run: cargo test --manifest-path packages/relay/Cargo.toml
+
+  ios:
+    # iOS 壳（Capacitor + Swift 隧道代理）：macOS runner 上 xcodebuild 构建 + Swift 单测（P0-3，ADR-039）
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: pod install
+        working-directory: apps/controller/android/ios/App
+        run: pod install
+      - name: xcodebuild build
+        working-directory: apps/controller/android/ios/App
+        run: xcodebuild -workspace App.xcworkspace -scheme App -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+      - name: Swift unit tests
+        working-directory: apps/controller/android/ios/App
+        run: xcodebuild -workspace App.xcworkspace -scheme App -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' CODE_SIGNING_ALLOWED=NO test
