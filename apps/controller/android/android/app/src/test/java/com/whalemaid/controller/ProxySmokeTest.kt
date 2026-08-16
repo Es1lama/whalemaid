@@ -4,6 +4,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -13,8 +14,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 本地全链冒烟（默认跳过；WHALEMAID_PROXY_SMOKE=1 时运行）：
- * 在 Mac 上启动 ProxyCore（纯 JVM），对真实中继(127.0.0.1:9180)+真实 DSH 测试宿主(3181) 跑
- * 管理页 → /_ctrl/connect → 隧道官方 UI → 官方 /api 的完整链路。
+ * 在 Mac 上启动 ProxyCore（纯 JVM），按环境变量指定的真实中继与受控 DSH 跑
+ * 管理页 → /_ctrl/connect → 隧道官方 UI → 官方 /api 的完整链路；仓库不保存设备密码。
  * 设备端 e2e 只做一次：本冒烟全绿之后。
  */
 class ProxySmokeTest {
@@ -24,6 +25,10 @@ class ProxySmokeTest {
     @Test
     fun fullLoopLocally() {
         assumeTrue(System.getenv("WHALEMAID_PROXY_SMOKE") == "1")
+        val smokeServer = System.getenv("WHALEMAID_SMOKE_SERVER") ?: ""
+        val smokeDevice = System.getenv("WHALEMAID_SMOKE_DEVICE_ID") ?: ""
+        val smokePassword = System.getenv("WHALEMAID_SMOKE_PASSWORD") ?: ""
+        assumeTrue("smoke server, device id, and password are required", smokeServer.isNotEmpty() && smokeDevice.isNotEmpty() && smokePassword.isNotEmpty())
         val pins = HashMap<String, String>()
         val core = ProxyCore(
             pinStore = object : PinStore {
@@ -55,7 +60,14 @@ class ProxySmokeTest {
                 results += if (c1 == 200 && b1.contains("WM-MGMT-PAGE") && managementToken.isNotEmpty()) "PASS 管理页" else "FAIL 管理页 $c1 ${b1.take(60)}"
 
                 // 2. 连接
-                val (c2, b2) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"W4saWTTZM4Mr","credentialKind":"longTerm"}""")
+                val connectBody = JSONObject()
+                    .put("server", smokeServer)
+                    .put("deviceId", smokeDevice)
+                    .put("password", smokePassword)
+                    .put("credentialKind", "longTerm")
+                    .put("remember", false)
+                    .toString()
+                val (c2, b2) = post("/_ctrl/connect", connectBody)
                 results += if (c2 == 200 && b2.contains("ok") && core.session.authToken.isNotEmpty()) "PASS connect + sessionToken" else "FAIL connect $c2 token=${core.session.authToken.isNotEmpty()} $b2"
 
                 // 3. 已连接 GET / → 隧道官方 UI（含 WebView 兼容 polyfill 注入）
@@ -85,8 +97,8 @@ class ProxySmokeTest {
                             .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/101.0.4951.61 Mobile Safari/537.36")
                             .build()
                     ).execute().use { it.code to (it.header("content-type") ?: "") }
-                    results += if (ca == 200 && ba.contains("javascript")) "PASS 资源MIME(Chrome头) → $ba"
-                    else "FAIL 资源MIME(Chrome头) $ca $ba"
+                    results += if (chromeLike.first == 200 && chromeLike.second.contains("javascript")) "PASS 资源MIME(Chrome头) → ${chromeLike.second}"
+                    else "FAIL 资源MIME(Chrome头) ${chromeLike.first} ${chromeLike.second}"
                 } else {
                     results += "FAIL 官方HTML中未找到assets脚本"
                 }
@@ -105,7 +117,13 @@ class ProxySmokeTest {
                 }
 
                 // 5. 错误密码路径（同类全查：错误文案不崩）
-                val (c5, b5) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"WRONG","credentialKind":"longTerm"}""")
+                val wrongBody = JSONObject()
+                    .put("server", smokeServer)
+                    .put("deviceId", smokeDevice)
+                    .put("password", "WRONG")
+                    .put("credentialKind", "longTerm")
+                    .toString()
+                val (c5, b5) = post("/_ctrl/connect", wrongBody)
                 results += if (c5 == 401) "PASS 错密401" else "FAIL 错密 $c5 $b5"
 
                 // 6. 事件 WS 桥：/api/events.mux upgrade → 隧道 → 宿主官方事件通道（官方前端靠它接收 turn/message 流）
@@ -147,6 +165,7 @@ class ProxySmokeTest {
             } catch (e: Exception) {
                 results += "EXCEPTION ${e.message}"
             } finally {
+                core.stop()
                 latch.countDown()
             }
         }
