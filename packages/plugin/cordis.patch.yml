@@ -1,11 +1,14 @@
 # SPEC: docs/PREFLIGHT.md 插件安装形态（dsh plugin add）
 # SPEC: docs/requirements.md#REQ-009 远程目录浏览依赖 browse 选择器后端
 # 官方 seam 语义：pin 交互 = 禁用 auto 行 + 直接插入 -browse 行（"compose the -browse row directly"）
+# auto 原本同时挂载 后端 + 客户端面；禁用 auto 后必须把两面都显式插入（缺客户端面 = 手机端"选择工作区"空弹层）
 - insert:
     - id: whalemaid
       name: '@whalemaid/plugin'
     - id: directory-picker-browse
       name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: directory-picker-browse-surface
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
 
 - id: directory-picker
   disabled: true
