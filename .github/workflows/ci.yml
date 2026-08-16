@@ -30,6 +30,26 @@ jobs:
       - run: cargo check --manifest-path packages/relay/Cargo.toml
       - run: cargo test --manifest-path packages/relay/Cargo.toml
 
+  android:
+    # Android 壳（Capacitor + 原生隧道代理）：CI 构建 APK 并上传产物（NEEDED-BY-OWNER 手机实机用 CI 产物）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: android-actions/setup-android@v3
+      - name: 安装 compileSdk 35
+        run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: gradle assembleDebug（剔除本机代理配置，CI 直连下载依赖）
+        working-directory: apps/controller/android/android
+        run: |
+          sed -i '/systemProp.*proxy/d' gradle.properties
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whalemaid-controller-apk
+          path: apps/controller/android/android/app/build/outputs/apk/debug/app-debug.apk
+
   ios:
     # iOS 壳（Capacitor + Swift 隧道代理）：macOS runner 上 xcodebuild 构建 + Swift 单测（P0-3，ADR-039）
     runs-on: macos-latest
