@@ -102,9 +102,6 @@ async fn reload_config(s: &Arc<AppState>) -> Result<(), String> {
 /// SEC-001：受控端首次注册——需可消费安装令牌（默认单次+可选 TTL）；签发每设备凭据与初始隧道 token
 async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let code = headers.get("x-install-code").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if !s.install_tokens.lock().await.verify_and_consume(code) {
-        return Err(unauthorized())
-    }
     // 审计三轮#4：enrollment secret 为长期共享秘密——按 IP 限速 + 设备配额双闸防批量注册
     if s.limiter.lock().await.consume(&format!("register:{}", client_ip(&s, &headers, Some(peer)))) != Attempt::Allowed {
         return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
@@ -120,6 +117,14 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
     let password_digest = b.get("passwordDigest").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if device_id.is_empty() || password_digest.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "deviceId/passwordDigest required" }))))
+    }
+    // 单次令牌不可浪费在注定失败的注册上：先查设备占用（409 不消耗令牌），
+    // 否则宿主重试循环一次 409 就烧掉一个令牌，管理员吊销后反而无法再注册
+    if s.registry.lock().await.active().any(|d| d.id == device_id) {
+        return Err((StatusCode::CONFLICT, Json(json!({ "error": "device-already-registered" }))))
+    }
+    if !s.install_tokens.lock().await.verify_and_consume(&code) {
+        return Err(unauthorized())
     }
     let (record, credential, tunnel_token) = s
         .registry
