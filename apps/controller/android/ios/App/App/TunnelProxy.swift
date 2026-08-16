@@ -223,36 +223,38 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
     private func wssTunnel(server: String, grant: String, requestHead: Data, body: Data?, done: @escaping (Data) -> Void) {
         guard let url = URL(string: "wss://\(server)/_whalemaid/tunnel-ws") else { done(Data()); return }
         let task = pinnedSession.webSocketTask(with: url)
-        var out = Data()
+        let out = Buffer()
         var finished = false
         task.resume()
         task.send(.string("GRANT \(grant) \(session.deviceId)")) { _ in
             task.send(.data(requestHead)) { _ in
                 if let body = body, !body.isEmpty {
-                    task.send(.data(body)) { _ in self.receiveLoop(task, into: &out, done: done) }
+                    task.send(.data(body)) { _ in self.receiveLoop(task, buffer: out, done: done) }
                 } else {
-                    self.receiveLoop(task, into: &out, done: done)
+                    self.receiveLoop(task, buffer: out, done: done)
                 }
             }
         }
         // 防挂起：15s 后未完成直接返回已收数据
         queue.asyncAfter(deadline: .now() + 15) {
-            if !finished { finished = true; task.cancel(); done(out) }
+            if !finished { finished = true; task.cancel(); done(out.data) }
         }
     }
 
-    private func receiveLoop(_ task: URLSessionWebSocketTask, into out: inout Data, done: @escaping (Data) -> Void) {
+    private final class Buffer { var data = Data() }
+
+    private func receiveLoop(_ task: URLSessionWebSocketTask, buffer: Buffer, done: @escaping (Data) -> Void) {
         task.receive { result in
             switch result {
             case .success(let message):
                 switch message {
-                case .data(let d): out.append(d)
-                case .string(let s): out.append(Data(s.utf8))
+                case .data(let d): buffer.data.append(d)
+                case .string(let s): buffer.data.append(Data(s.utf8))
                 @unknown default: break
                 }
-                self.receiveLoop(task, into: &out, done: done)
+                self.receiveLoop(task, buffer: buffer, done: done)
             case .failure:
-                done(out)
+                done(buffer.data)
             }
         }
     }

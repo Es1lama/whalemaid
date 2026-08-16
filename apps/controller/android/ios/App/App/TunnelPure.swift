@@ -78,7 +78,6 @@ enum TunnelPure {
 
     /// 解析隧道上游 HTTP 响应：状态码/小写头/chunked 解码；无分隔符 → 502
     static func parseResponse(_ raw: Data) -> (status: Int, headers: [String: String], body: Data) {
-        let bytes = [UInt8](raw)
         guard let sep = indexOfCrlfCrlf(raw) else { return (502, [:], raw) }
         let head = String(data: raw[0..<sep], encoding: .utf8) ?? ""
         var body = Data(raw[(sep + 4)...])
