@@ -1,9 +1,10 @@
 // SPEC: docs/protocol.md PROTO-003 受控端持久状态：设备编号 + 长期密码 + 中继凭据（授权在中继侧，宿主本地不再保存配对状态）
 // SPEC: docs/threat-model.md TM-003（凭据落盘 0600；不存明文 token 之外的任何会话状态）
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { lockSync } from 'proper-lockfile'
 import { generateDeviceId, generatePassword } from './device.js'
 
 export interface StoreState {
@@ -38,27 +39,79 @@ function resolveDataDir(options: StoreOptions): string {
   return join(fileURLToPath(profileUrl), 'whalemaid')
 }
 
+interface ProcessLease {
+  refs: number
+  release: () => void
+}
+
+const processLeases = new Map<string, ProcessLease>()
+const LOCK_STALE_MS = 30_000
+const LOCK_UPDATE_MS = 10_000
+
+function claimProfile(stateFile: string): () => void {
+  const active = processLeases.get(stateFile)
+  if (active) {
+    active.refs += 1
+  } else {
+    let release: () => void
+    try {
+      release = lockSync(stateFile, {
+        realpath: false,
+        stale: LOCK_STALE_MS,
+        update: LOCK_UPDATE_MS,
+        onCompromised: (cause) => {
+          throw new Error(`WhaleMaid profile owner 锁已损坏：${stateFile}`, { cause })
+        },
+      })
+    } catch (cause) {
+      throw new Error(`WhaleMaid profile 已由另一个 DSH 进程控制，拒绝让同一设备身份路由到多个宿主：${stateFile}`, { cause })
+    }
+    processLeases.set(stateFile, { refs: 1, release })
+  }
+
+  let closed = false
+  return () => {
+    if (closed) return
+    closed = true
+    const lease = processLeases.get(stateFile)
+    if (!lease) return
+    lease.refs -= 1
+    if (lease.refs === 0) {
+      processLeases.delete(stateFile)
+      lease.release()
+    }
+  }
+}
+
 export class Store {
   private state: StoreState
   private path: string
+  private releaseProfile: () => void
 
   constructor(options: StoreOptions) {
-    const base = resolveDataDir(options)
+    const requestedBase = resolveDataDir(options)
+    mkdirSync(requestedBase, { recursive: true })
+    const base = realpathSync(requestedBase)
     this.path = join(base, 'store.json')
-    mkdirSync(base, { recursive: true })
-    this.state = existsSync(this.path)
-      ? (JSON.parse(readFileSync(this.path, 'utf8')) as StoreState)
-      : {
-          longPassword: generatePassword(),
-          deviceId: generateDeviceId(),
-          relayCredential: '',
-          adminToken: randomBytes(16).toString('hex'),
-        }
-    this.state.relayCredential ??= ''
-    this.state.adminToken ??= randomBytes(16).toString('hex')
-    this.state.deviceId ??= generateDeviceId()
-    this.state.longPassword ??= generatePassword()
-    this.persist() // 初始状态（含生成的长期密码与设备编号）立即落盘
+    this.releaseProfile = claimProfile(this.path)
+    try {
+      this.state = existsSync(this.path)
+        ? (JSON.parse(readFileSync(this.path, 'utf8')) as StoreState)
+        : {
+            longPassword: generatePassword(),
+            deviceId: generateDeviceId(),
+            relayCredential: '',
+            adminToken: randomBytes(16).toString('hex'),
+          }
+      this.state.relayCredential ??= ''
+      this.state.adminToken ??= randomBytes(16).toString('hex')
+      this.state.deviceId ??= generateDeviceId()
+      this.state.longPassword ??= generatePassword()
+      this.persist() // 初始状态（含生成的长期密码与设备编号）立即落盘
+    } catch (cause) {
+      this.releaseProfile()
+      throw cause
+    }
   }
 
   private persist(): void {
@@ -89,6 +142,11 @@ export class Store {
   setRelayCredential(value: string): void {
     this.state.relayCredential = value
     this.persist()
+  }
+
+  /** DSH plugin disposal：最后一个同进程 HMR owner 释放跨进程 profile 锁。 */
+  close(): void {
+    this.releaseProfile()
   }
 
   /** REQ-002：重新生成长期密码 = 清凭据触发重新注册（旧密码哈希随注册更新即失效） */

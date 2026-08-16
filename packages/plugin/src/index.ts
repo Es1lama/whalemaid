@@ -61,6 +61,12 @@ export function apply(ctx: Context, config?: Config): void {
         (msg) => ctx.logger.info(msg),
       )
     : null
+  let disposed = false
+  ctx.effect(() => () => {
+    disposed = true
+    relay?.stop()
+    store.close()
+  })
   if (!relay) {
     ctx.logger.warn('[whalemaid] 未配置 relayUrl：插件不生效（远程控制只走中继，编号+密码模型）——见 docs/deploy-server.md')
     return
@@ -83,10 +89,16 @@ export function apply(ctx: Context, config?: Config): void {
   // UX-001：启动即注册——中继暂不可达时指数退避重试（2s→60s，永续），不依赖用户操作
   let attempt = 0
   const tryStart = async () => {
+    if (disposed) return
     try {
       await relay.start()
+      if (disposed) {
+        relay.stop()
+        return
+      }
       ctx.logger.info(`[whalemaid] 中继已接入 device=${store.deviceId} target=宿主原生web:${hostWeb.port}（主控端用设备编号+密码连接，无需 IP）`)
     } catch (e) {
+      if (disposed) return
       attempt += 1
       const delay = Math.min(2000 * 2 ** attempt, 60_000)
       ctx.logger.warn(`[whalemaid] 中继接入失败（第 ${attempt} 次）: ${e instanceof Error ? e.message : String(e)}；${Math.round(delay / 1000)}s 后重试`)
@@ -191,8 +203,4 @@ export function apply(ctx: Context, config?: Config): void {
   } catch (e) {
     ctx.logger.warn(`[whalemaid] V1 路由挂载失败: ${e instanceof Error ? e.message : String(e)}`)
   }
-
-  ctx.effect(() => () => {
-    relay.stop()
-  })
 }

@@ -1,8 +1,9 @@
 // SPEC: docs/requirements.md#REQ-002 被控端设备与凭据单测（网关时代测试已随自定 RPC 废止删除，见 git 历史）
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { checkSync, lockSync } from 'proper-lockfile'
 import { describe, expect, it } from 'vitest'
 import { generateDeviceId, generatePassword } from './device.js'
 import { Store } from './store.js'
@@ -45,10 +46,13 @@ describe('Store', () => {
     const profile = profileUrl(tempDir('whalemaid-profile-a-'))
     const store = new Store({ profileBaseUrl: profile })
     store.setRelayCredential('cred-123')
+    const deviceId = store.deviceId
+    const longPassword = store.longPassword
+    store.close()
 
     const again = new Store({ profileBaseUrl: profile })
-    expect(again.deviceId).toBe(store.deviceId)
-    expect(again.longPassword).toBe(store.longPassword)
+    expect(again.deviceId).toBe(deviceId)
+    expect(again.longPassword).toBe(longPassword)
     expect(again.relayCredential).toBe('cred-123')
   })
 
@@ -67,15 +71,46 @@ describe('Store', () => {
     const dataDir = tempDir('whalemaid-explicit-')
     const first = new Store({ dataDir, profileBaseUrl: profileUrl(tempDir('whalemaid-profile-a-')) })
     first.setRelayCredential('explicit-credential')
+    const deviceId = first.deviceId
+    first.close()
 
     const second = new Store({ dataDir, profileBaseUrl: profileUrl(tempDir('whalemaid-profile-b-')) })
-    expect(second.deviceId).toBe(first.deviceId)
+    expect(second.deviceId).toBe(deviceId)
     expect(second.relayCredential).toBe('explicit-credential')
-    expect(second.file).toBe(join(dataDir, 'store.json'))
+    expect(second.file).toBe(join(realpathSync(dataDir), 'store.json'))
   })
 
   it('没有显式目录或 profile 归属时拒绝创建共享身份（D-032）', () => {
     expect(() => new Store({})).toThrow(/profileBaseUrl/)
+  })
+
+  it('已有外部 owner 时拒绝同 profile 第二个 DSH 进程（D-032）', () => {
+    const dataDir = tempDir('whalemaid-foreign-owner-')
+    mkdirSync(dataDir, { recursive: true })
+    const releaseForeignOwner = lockSync(join(dataDir, 'store.json'), {
+      realpath: false,
+      stale: 30_000,
+      update: 10_000,
+    })
+
+    expect(() => new Store({ dataDir })).toThrow(/另一个 DSH 进程/)
+    releaseForeignOwner()
+    const recovered = new Store({ dataDir })
+    recovered.close()
+  })
+
+  it('同进程 HMR 可重入，最后一个 owner disposal 后释放锁（D-032）', () => {
+    const dataDir = tempDir('whalemaid-hmr-owner-')
+    const first = new Store({ dataDir })
+    const second = new Store({ dataDir })
+
+    expect(second.deviceId).toBe(first.deviceId)
+    expect(checkSync(first.file, { realpath: false, stale: 30_000 })).toBe(true)
+    first.close()
+    expect(checkSync(second.file, { realpath: false, stale: 30_000 })).toBe(true)
+    first.close()
+    second.close()
+    expect(checkSync(second.file, { realpath: false, stale: 30_000 })).toBe(false)
   })
 
   it('拒绝把非 file URL 当成 profile 目录（D-032）', () => {
