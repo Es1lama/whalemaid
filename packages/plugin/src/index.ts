@@ -57,6 +57,7 @@ export function apply(ctx: Context, config?: Config): void {
           longPassword: store.longPassword,
           savedCredential: store.relayCredential,
           onCredential: (c) => store.setRelayCredential(c),
+          onTemporaryStatus: (status) => store.syncTemporaryPasswordStatus(status),
         },
         (msg) => ctx.logger.info(msg),
       )

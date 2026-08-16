@@ -30,3 +30,9 @@ export function generateDeviceId(): string {
 export function generatePassword(): string {
   return randomBytes(9).toString('base64url').slice(0, 12)
 }
+
+/** 一次性临时密码：40 bit 随机量 + 独立前缀，主控端必须显式选择 temporary 类型。 */
+export function generateTemporaryPassword(): string {
+  const raw = base32(randomBytes(8), [4, 4])
+  return `WMT-${raw.slice(0, 4)}-${raw.slice(4, 8)}`
+}

@@ -1641,6 +1641,12 @@ function generatePassword() {
 }
 
 // src/store.ts
+var EMPTY_TEMPORARY_PASSWORD = {
+  password: "",
+  expiresAt: 0,
+  generation: 0,
+  state: "none"
+};
 function resolveDataDir(options) {
   if (options.dataDir) return options.dataDir;
   if (!options.profileBaseUrl) {
@@ -1703,12 +1709,14 @@ var Store = class {
         longPassword: generatePassword(),
         deviceId: generateDeviceId(),
         relayCredential: "",
-        adminToken: randomBytes2(16).toString("hex")
+        adminToken: randomBytes2(16).toString("hex"),
+        temporaryPassword: { ...EMPTY_TEMPORARY_PASSWORD }
       };
       this.state.relayCredential ??= "";
       this.state.adminToken ??= randomBytes2(16).toString("hex");
       this.state.deviceId ??= generateDeviceId();
       this.state.longPassword ??= generatePassword();
+      this.state.temporaryPassword ??= { ...EMPTY_TEMPORARY_PASSWORD };
       this.persist();
     } catch (cause) {
       this.releaseProfile();
@@ -1736,6 +1744,24 @@ var Store = class {
   }
   setRelayCredential(value) {
     this.state.relayCredential = value;
+    this.persist();
+  }
+  get temporaryPassword() {
+    return { ...this.state.temporaryPassword };
+  }
+  setTemporaryPassword(value) {
+    this.state.temporaryPassword = { ...value };
+    this.persist();
+  }
+  /** 心跳可能晚于 refresh 返回；旧 generation 不得清除新密码。 */
+  syncTemporaryPasswordStatus(status) {
+    const current = this.state.temporaryPassword;
+    if (status.generation < current.generation) return;
+    const keepPassword = status.state === "active" && status.generation === current.generation;
+    this.state.temporaryPassword = {
+      password: keepPassword ? current.password : "",
+      ...status
+    };
     this.persist();
   }
   /** DSH plugin disposal：最后一个同进程 HMR owner 释放跨进程 profile 锁。 */
@@ -1807,6 +1833,36 @@ var RelayClient = class {
   }
   child = null;
   timer;
+  updateCredential(credential) {
+    this.cfg.savedCredential = credential;
+    this.cfg.onCredential(credential);
+  }
+  requireCredential() {
+    if (!this.cfg.savedCredential) throw new Error("\u8BBE\u5907\u5C1A\u65E0\u4E2D\u7EE7\u51ED\u636E\uFF0C\u4E0D\u80FD\u7BA1\u7406\u4E34\u65F6\u5BC6\u7801\uFF1B\u8BF7\u7B49\u5F85\u9996\u6B21\u6CE8\u518C\u6210\u529F");
+    return this.cfg.savedCredential;
+  }
+  async issueTemporaryPassword(password, ttlSec) {
+    const credential = this.requireCredential();
+    const base = this.cfg.relayUrl.replace(/\/$/, "");
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/temporary-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ passwordDigest: phcScrypt(password), ttlSec }),
+      fingerprint: this.cfg.relayFingerprint
+    });
+    if (res.status >= 300) throw new RelayHttpError(res.status, `\u4E34\u65F6\u5BC6\u7801\u7B7E\u53D1\u5931\u8D25: ${res.status} ${await res.text()}`);
+    return await res.json();
+  }
+  async revokeTemporaryPassword() {
+    const credential = this.requireCredential();
+    const base = this.cfg.relayUrl.replace(/\/$/, "");
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/temporary-password`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${credential}` },
+      fingerprint: this.cfg.relayFingerprint
+    });
+    if (res.status >= 300) throw new RelayHttpError(res.status, `\u4E34\u65F6\u5BC6\u7801\u64A4\u9500\u5931\u8D25: ${res.status} ${await res.text()}`);
+  }
   /** 密码轮换（审计三轮#3）：凭据鉴权调 /password 端点原子替换 PHC——旧密码立即失效，凭据不丢、隧道不断；
    *  端点不可用（旧版中继）时退回：自吊销 + 重新注册（旧密码随之失效） */
   async rotatePassword(newPassword) {
@@ -1831,7 +1887,7 @@ var RelayClient = class {
       headers: { authorization: `Bearer ${this.cfg.savedCredential}` },
       fingerprint: this.cfg.relayFingerprint
     }).catch(() => void 0);
-    this.cfg.onCredential("");
+    this.updateCredential("");
   }
   async start() {
     const base = this.cfg.relayUrl.replace(/\/$/, "");
@@ -1844,7 +1900,7 @@ var RelayClient = class {
       } catch (e) {
         if (e instanceof RelayHttpError && CREDENTIAL_REJECTED.includes(e.status)) {
           this.log(`[whalemaid] \u51ED\u636E\u5931\u6548\uFF08${e.message}\uFF09\uFF0C\u91CD\u65B0\u6CE8\u518C`);
-          this.cfg.onCredential("");
+          this.updateCredential("");
           credential = "";
         } else {
           this.log(`[whalemaid] \u96A7\u9053\u5EFA\u7ACB\u6682\u5931\u8D25\uFF08${e instanceof Error ? e.message.slice(0, 80) : String(e)}\uFF09\uFF0C\u4FDD\u7559\u51ED\u636E\u9000\u907F\u91CD\u8BD5`);
@@ -1873,7 +1929,7 @@ var RelayClient = class {
     }
     const reg = await res.json();
     credential = reg.credential;
-    this.cfg.onCredential(credential);
+    this.updateCredential(credential);
     const binding = await this.establishTunnel(base, credential);
     this.startHeartbeat(base, credential);
     return binding;
@@ -1891,6 +1947,7 @@ var RelayClient = class {
             if (body.connectEvents && body.connectEvents > 0) {
               this.log(`[whalemaid] \u4E3B\u63A7\u7AEF\u5DF2\u8FDE\u63A5\uFF08\u6700\u8FD1 20s \u5185 ${body.connectEvents} \u6B21\u6388\u6743\uFF09\u2014\u2014\u6709\u4EBA\u6B63\u5728\u8FDC\u7A0B\u63A7\u5236\u672C\u673A`);
             }
+            if (body.temporaryPassword) this.cfg.onTemporaryStatus(body.temporaryPassword);
           } catch {
           }
         }
@@ -2210,7 +2267,8 @@ function apply(ctx, config) {
       deviceId: store.deviceId,
       longPassword: store.longPassword,
       savedCredential: store.relayCredential,
-      onCredential: (c) => store.setRelayCredential(c)
+      onCredential: (c) => store.setRelayCredential(c),
+      onTemporaryStatus: (status) => store.syncTemporaryPasswordStatus(status)
     },
     (msg) => ctx.logger.info(msg)
   ) : null;

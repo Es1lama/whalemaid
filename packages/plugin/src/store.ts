@@ -7,6 +7,24 @@ import { fileURLToPath } from 'node:url'
 import { lockSync } from 'proper-lockfile'
 import { generateDeviceId, generatePassword } from './device.js'
 
+export type TemporaryPasswordState = 'none' | 'active' | 'consumed' | 'expired' | 'revoked'
+
+export interface TemporaryPasswordRecord {
+  password: string
+  expiresAt: number
+  generation: number
+  state: TemporaryPasswordState
+}
+
+export type TemporaryPasswordStatus = Omit<TemporaryPasswordRecord, 'password'>
+
+const EMPTY_TEMPORARY_PASSWORD: TemporaryPasswordRecord = {
+  password: '',
+  expiresAt: 0,
+  generation: 0,
+  state: 'none',
+}
+
 export interface StoreState {
   /** SEC-002/UX-002：受控端长期密码（注册时只上报 scrypt PHC，明文只在宿主本地展示） */
   longPassword: string
@@ -16,6 +34,8 @@ export interface StoreState {
   relayCredential: string
   /** 受控端本地管理令牌（密码轮换等本机操作；启动生成，打印到宿主日志） */
   adminToken: string
+  /** REQ-003：当前 profile 的可分享临时密码；relay 只接收 PHC，终态心跳会清除此明文。 */
+  temporaryPassword: TemporaryPasswordRecord
 }
 
 export interface StoreOptions {
@@ -102,11 +122,13 @@ export class Store {
             deviceId: generateDeviceId(),
             relayCredential: '',
             adminToken: randomBytes(16).toString('hex'),
+            temporaryPassword: { ...EMPTY_TEMPORARY_PASSWORD },
           }
       this.state.relayCredential ??= ''
       this.state.adminToken ??= randomBytes(16).toString('hex')
       this.state.deviceId ??= generateDeviceId()
       this.state.longPassword ??= generatePassword()
+      this.state.temporaryPassword ??= { ...EMPTY_TEMPORARY_PASSWORD }
       this.persist() // 初始状态（含生成的长期密码与设备编号）立即落盘
     } catch (cause) {
       this.releaseProfile()
@@ -141,6 +163,27 @@ export class Store {
 
   setRelayCredential(value: string): void {
     this.state.relayCredential = value
+    this.persist()
+  }
+
+  get temporaryPassword(): TemporaryPasswordRecord {
+    return { ...this.state.temporaryPassword }
+  }
+
+  setTemporaryPassword(value: TemporaryPasswordRecord): void {
+    this.state.temporaryPassword = { ...value }
+    this.persist()
+  }
+
+  /** 心跳可能晚于 refresh 返回；旧 generation 不得清除新密码。 */
+  syncTemporaryPasswordStatus(status: TemporaryPasswordStatus): void {
+    const current = this.state.temporaryPassword
+    if (status.generation < current.generation) return
+    const keepPassword = status.state === 'active' && status.generation === current.generation
+    this.state.temporaryPassword = {
+      password: keepPassword ? current.password : '',
+      ...status,
+    }
     this.persist()
   }
 

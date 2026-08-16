@@ -41,6 +41,7 @@ function makeCfg(over: Partial<RelayClientConfig> = {}): RelayClientConfig {
     longPassword: 'pw',
     savedCredential: '',
     onCredential: () => void 0,
+    onTemporaryStatus: () => void 0,
     ...over,
   }
 }
@@ -92,13 +93,44 @@ describe('RelayClient 凭据策略', () => {
       if (url.endsWith('/tunnel') && opts.headers.authorization === 'Bearer cred-new') {
         return okRes(200, { ...binding })
       }
+      if (url.endsWith('/temporary-password') && opts.method === 'POST') {
+        expect(opts.headers.authorization).toBe('Bearer cred-new')
+        expect(opts.body).not.toContain('WMT-ABCD-EFGH')
+        expect(JSON.parse(opts.body ?? '{}').passwordDigest).toMatch(/^\$scrypt\$/)
+        return okRes(200, { state: 'active', expiresAt: 2000, generation: 1 })
+      }
       throw new Error('unexpected ' + url)
     }))
     const got = await client.start()
     expect(got.service).toBe('DEV-1')
     expect(saved).toContain('')
     expect(saved).toContain('cred-new')
+    await expect(client.issueTemporaryPassword('WMT-ABCD-EFGH', 600)).resolves.toEqual({
+      state: 'active',
+      expiresAt: 2000,
+      generation: 1,
+    })
     client.stop()
+  })
+
+  it('临时密码签发与撤销必须使用设备凭据，且未注册时失败关闭', async () => {
+    const methods: string[] = []
+    const client = new RelayClient(makeCfg({ savedCredential: 'cred-live' }), () => void 0, fake((url, opts) => {
+      if (!url.endsWith('/temporary-password')) throw new Error('unexpected ' + url)
+      expect(opts.headers.authorization).toBe('Bearer cred-live')
+      methods.push(opts.method)
+      return opts.method === 'POST'
+        ? okRes(200, { state: 'active', expiresAt: 3000, generation: 2 })
+        : okRes(200, { state: 'revoked' })
+    }))
+    await client.issueTemporaryPassword('WMT-ABCD-EFGH', 900)
+    await client.revokeTemporaryPassword()
+    expect(methods).toEqual(['POST', 'DELETE'])
+
+    const unregistered = new RelayClient(makeCfg(), () => void 0, fake(() => {
+      throw new Error('request should not run')
+    }))
+    await expect(unregistered.issueTemporaryPassword('WMT-ABCD-EFGH', 900)).rejects.toThrow(/中继凭据/)
   })
 
   it('注册 409 device-already-registered 给出可操作指引（吊销旧设备记录后可自愈）', async () => {

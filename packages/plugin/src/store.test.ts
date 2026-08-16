@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { checkSync, lockSync } from 'proper-lockfile'
 import { describe, expect, it } from 'vitest'
-import { generateDeviceId, generatePassword } from './device.js'
+import { generateDeviceId, generatePassword, generateTemporaryPassword } from './device.js'
 import { Store } from './store.js'
 
 /** 测试隔离：临时目录，不碰真实 ~/.dsh */
@@ -32,6 +32,13 @@ describe('generatePassword', () => {
   it('12 字符且两次不同', () => {
     expect(generatePassword()).toHaveLength(12)
     expect(generatePassword()).not.toBe(generatePassword())
+  })
+})
+
+describe('generateTemporaryPassword', () => {
+  it('使用独立 WMT 格式且每次随机（REQ-003）', () => {
+    expect(generateTemporaryPassword()).toMatch(/^WMT-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/)
+    expect(generateTemporaryPassword()).not.toBe(generateTemporaryPassword())
   })
 })
 
@@ -115,6 +122,42 @@ describe('Store', () => {
 
   it('拒绝把非 file URL 当成 profile 目录（D-032）', () => {
     expect(() => new Store({ profileBaseUrl: 'https://example.invalid/profile/' })).toThrow(/file:/)
+  })
+
+  it('临时密码状态按 profile 持久化，消费后清除可分享明文（REQ-003）', () => {
+    const dataDir = tempDir('whalemaid-temporary-state-')
+    const store = new Store({ dataDir })
+    store.setTemporaryPassword({
+      password: 'WMT-ABCD-EFGH',
+      expiresAt: 2_000,
+      generation: 3,
+      state: 'active',
+    })
+    store.close()
+
+    const again = new Store({ dataDir })
+    expect(again.temporaryPassword).toEqual({
+      password: 'WMT-ABCD-EFGH',
+      expiresAt: 2_000,
+      generation: 3,
+      state: 'active',
+    })
+    again.syncTemporaryPasswordStatus({ expiresAt: 2_000, generation: 3, state: 'consumed' })
+    expect(again.temporaryPassword.password).toBe('')
+    expect(again.temporaryPassword.state).toBe('consumed')
+  })
+
+  it('旧 generation 心跳不能覆盖新签发密码（REQ-003）', () => {
+    const store = testStore()
+    store.setTemporaryPassword({
+      password: 'WMT-NEW1-PASS',
+      expiresAt: 3_000,
+      generation: 5,
+      state: 'active',
+    })
+    store.syncTemporaryPasswordStatus({ expiresAt: 2_000, generation: 4, state: 'consumed' })
+    expect(store.temporaryPassword.password).toBe('WMT-NEW1-PASS')
+    expect(store.temporaryPassword.generation).toBe(5)
   })
 
   it('重生成密码清凭据触发重注册（REQ-002）', () => {

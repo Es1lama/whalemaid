@@ -24,6 +24,15 @@ export interface RelayClientConfig {
   /** 已保存的每设备凭据（续期/重连用） */
   savedCredential: string
   onCredential: (credential: string) => void
+  onTemporaryStatus: (status: TemporaryPasswordStatus) => void
+}
+
+export type TemporaryPasswordState = 'none' | 'active' | 'consumed' | 'expired' | 'revoked'
+
+export interface TemporaryPasswordStatus {
+  state: TemporaryPasswordState
+  expiresAt: number
+  generation: number
 }
 
 export interface RelayBinding {
@@ -102,6 +111,40 @@ export class RelayClient {
 
   constructor(private cfg: RelayClientConfig, private log: (msg: string) => void, private req: RequestFn = pinnedRequest) {}
 
+  private updateCredential(credential: string): void {
+    this.cfg.savedCredential = credential
+    this.cfg.onCredential(credential)
+  }
+
+  private requireCredential(): string {
+    if (!this.cfg.savedCredential) throw new Error('设备尚无中继凭据，不能管理临时密码；请等待首次注册成功')
+    return this.cfg.savedCredential
+  }
+
+  async issueTemporaryPassword(password: string, ttlSec: number): Promise<TemporaryPasswordStatus> {
+    const credential = this.requireCredential()
+    const base = this.cfg.relayUrl.replace(/\/$/, '')
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/temporary-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ passwordDigest: phcScrypt(password), ttlSec }),
+      fingerprint: this.cfg.relayFingerprint,
+    })
+    if (res.status >= 300) throw new RelayHttpError(res.status, `临时密码签发失败: ${res.status} ${await res.text()}`)
+    return (await res.json()) as unknown as TemporaryPasswordStatus
+  }
+
+  async revokeTemporaryPassword(): Promise<void> {
+    const credential = this.requireCredential()
+    const base = this.cfg.relayUrl.replace(/\/$/, '')
+    const res = await this.req(`${base}/_whalemaid/devices/${this.cfg.deviceId}/temporary-password`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${credential}` },
+      fingerprint: this.cfg.relayFingerprint,
+    })
+    if (res.status >= 300) throw new RelayHttpError(res.status, `临时密码撤销失败: ${res.status} ${await res.text()}`)
+  }
+
   /** 密码轮换（审计三轮#3）：凭据鉴权调 /password 端点原子替换 PHC——旧密码立即失效，凭据不丢、隧道不断；
    *  端点不可用（旧版中继）时退回：自吊销 + 重新注册（旧密码随之失效） */
   async rotatePassword(newPassword: string): Promise<void> {
@@ -126,7 +169,7 @@ export class RelayClient {
       headers: { authorization: `Bearer ${this.cfg.savedCredential}` },
       fingerprint: this.cfg.relayFingerprint,
     }).catch(() => void 0)
-    this.cfg.onCredential('')
+    this.updateCredential('')
   }
 
   async start(): Promise<RelayBinding> {
@@ -142,7 +185,7 @@ export class RelayClient {
       } catch (e) {
         if (e instanceof RelayHttpError && CREDENTIAL_REJECTED.includes(e.status)) {
           this.log(`[whalemaid] 凭据失效（${e.message}），重新注册`)
-          this.cfg.onCredential('')
+          this.updateCredential('')
           credential = ''
         } else {
           this.log(`[whalemaid] 隧道建立暂失败（${e instanceof Error ? e.message.slice(0, 80) : String(e)}），保留凭据退避重试`)
@@ -171,7 +214,7 @@ export class RelayClient {
     }
     const reg = (await res.json()) as unknown as RelayBinding
     credential = reg.credential
-    this.cfg.onCredential(credential)
+    this.updateCredential(credential)
     const binding = await this.establishTunnel(base, credential)
     this.startHeartbeat(base, credential)
     return binding
@@ -188,10 +231,11 @@ export class RelayClient {
           // UX-009：主控端成功授权提示（受控端终端可见；计数由心跳带走清零）
           if (res.status === 200) {
             try {
-              const body = (await res.json()) as { connectEvents?: number }
+              const body = (await res.json()) as { connectEvents?: number; temporaryPassword?: TemporaryPasswordStatus }
               if (body.connectEvents && body.connectEvents > 0) {
                 this.log(`[whalemaid] 主控端已连接（最近 20s 内 ${body.connectEvents} 次授权）——有人正在远程控制本机`)
               }
+              if (body.temporaryPassword) this.cfg.onTemporaryStatus(body.temporaryPassword)
             } catch { /* 心跳体解析失败不影响链路 */ }
           }
         })
