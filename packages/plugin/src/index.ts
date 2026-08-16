@@ -65,6 +65,15 @@ export function apply(ctx: Context, config?: Config): void {
   }
   ctx.logger.info(`[whalemaid] 设备编号 ${store.deviceId}（长期密码见 ${store.file}）；隧道目标 = 宿主原生 web:${hostWeb.port}；本地管理 token=${store.adminToken}`)
 
+  // UX-009/022（受控端知情与首次启用引导，控制台级）：
+  // 本机（受控端）终端即可看到：设备编号、长期密码位置、轮换入口、被连接提示——无人值守机器的操作者随时可查。
+  ctx.logger.info(`[whalemaid] ==== WhaleMaid 受控端说明 ====
+  · 设备编号: ${store.deviceId}（主控端用「编号+长期密码」连接，全程无 IP）
+  · 长期密码: 见 ${store.file} 的 longPassword；轮换: POST /whalemaid/rotate-password + x-whalemaid-token: ${store.adminToken}
+  · 安全: 有人连接本机 = 完整远程控制，等同其坐在本机前；请勿泄露密码，失窃即轮换
+  · 被连接提示: 主控端连接成功/断开会打印在下方日志（[whalemaid] 主控端已连接/已断开）
+  ========================================`)
+
   // UX-001：启动即注册——中继暂不可达时指数退避重试（2s→60s，永续），不依赖用户操作
   let attempt = 0
   const tryStart = async () => {

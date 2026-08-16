@@ -208,6 +208,7 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
             return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong password or unknown device" }))))
         }
         s.limiter.lock().await.record_success(&key);
+        { let mut reg = s.registry.lock().await; reg.note_connect(&device_id); }
         let token = Uuid::new_v4().simple().to_string();
         s.controller_sessions.lock().await.issue(token.clone(), device_id.clone(), ip.clone());
         (service, port, token)
@@ -300,11 +301,13 @@ async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::ext
     if !authorized {
         return Err(unauthorized())
     }
-    let known = s.registry.lock().await.touch(&id);
+    let mut reg = s.registry.lock().await;
+    let known = reg.touch(&id);
     if !known {
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))
     }
-    Ok((StatusCode::OK, Json(json!({ "ok": true }))))
+    let connect_events = reg.take_connect_events(&id);
+    Ok((StatusCode::OK, Json(json!({ "ok": true, "connectEvents": connect_events }))))
 }
 
 /// audit#4（D-026）：主控端按设备编号查询状态——Phase A 无账号，设备列表 = 主控端本机记忆 + 本端点逐个查询；

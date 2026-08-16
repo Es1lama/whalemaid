@@ -28,6 +28,9 @@ pub struct DeviceRecord {
     pub port: u16,
     pub revoked: bool,
     pub created_at: u64,
+    /// 主控端成功授权次数（心跳带走清零；UX-009 受控端知情提示；内存态不落盘）
+    #[serde(default)]
+    pub connect_events: u64,
 }
 
 pub struct Registry {
@@ -119,6 +122,7 @@ impl Registry {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            connect_events: 0,
         };
         self.next_port += 1;
         self.devices.push(record.clone());
@@ -167,6 +171,17 @@ impl Registry {
     }
 
     /// 心跳：更新内存时间戳；返回该设备是否已知且未吊销
+    /// 主控端成功授权计数（心跳带走并清零，UX-009 受控端知情提示用）
+    pub fn take_connect_events(&mut self, id: &str) -> u64 {
+        let n = self.devices.iter().find(|d| d.id == id).map(|d| d.connect_events).unwrap_or(0);
+        if let Some(d) = self.devices.iter_mut().find(|d| d.id == id) { d.connect_events = 0; }
+        n
+    }
+
+    pub fn note_connect(&mut self, id: &str) {
+        if let Some(d) = self.devices.iter_mut().find(|d| d.id == id) { d.connect_events += 1; }
+    }
+
     pub fn touch(&mut self, id: &str) -> bool {
         let known = self.devices.iter().any(|d| d.id == id && !d.revoked);
         if known {

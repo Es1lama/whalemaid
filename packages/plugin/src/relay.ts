@@ -154,7 +154,19 @@ export class RelayClient {
         method: 'POST',
         headers: { authorization: `Bearer ${credential}` },
         fingerprint: this.cfg.relayFingerprint,
-      }).catch(() => void 0)
+      })
+        .then(async (res) => {
+          // UX-009：主控端成功授权提示（受控端终端可见；计数由心跳带走清零）
+          if (res.status === 200) {
+            try {
+              const body = (await res.json()) as { connectEvents?: number }
+              if (body.connectEvents && body.connectEvents > 0) {
+                this.log(`[whalemaid] 主控端已连接（最近 20s 内 ${body.connectEvents} 次授权）——有人正在远程控制本机`)
+              }
+            } catch { /* 心跳体解析失败不影响链路 */ }
+          }
+        })
+        .catch(() => void 0)
     }, 20_000)
     this.timer.unref()
   }
