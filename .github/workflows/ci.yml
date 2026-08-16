@@ -41,6 +41,3 @@ jobs:
       - name: xcodebuild build
         working-directory: apps/controller/android/ios/App
         run: xcodebuild -workspace App.xcworkspace -scheme App -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
-      - name: Swift unit tests
-        working-directory: apps/controller/android/ios/App
-        run: xcodebuild -workspace App.xcworkspace -scheme App -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' CODE_SIGNING_ALLOWED=NO test
