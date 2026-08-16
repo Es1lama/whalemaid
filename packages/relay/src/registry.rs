@@ -13,12 +13,58 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporaryCredentialState {
+    #[default]
+    None,
+    Active,
+    Consumed,
+    Revoked,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TemporaryPasswordRecord {
+    #[serde(default)]
+    pub digest: String,
+    #[serde(default)]
+    pub expires_at: u64,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub state: TemporaryCredentialState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemporaryPasswordCandidate {
+    pub digest: String,
+    pub expires_at: u64,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemporaryPasswordIssued {
+    pub expires_at: u64,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemporaryCredentialError {
+    UnknownDevice,
+    NotConfigured,
+    Expired,
+    Consumed,
+    Revoked,
+    Superseded,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceRecord {
     pub id: String,
     /// 每设备控制面凭据摘要（SEC-001：不存明文）
     pub credential_digest: String,
-    /// 设备密码 argon2 哈希（SEC-002：加盐慢哈希）
+    /// 设备长期密码 scrypt PHC（SEC-002：加盐慢哈希）
     pub password_digest: String,
     /// rathole 握手所需明文 token——rathole 服务端模型要求配置持有明文（服务端即验证方，本文件即服务端秘密存储，mode 0600）
     pub rathole_token: String,
@@ -31,6 +77,9 @@ pub struct DeviceRecord {
     /// 主控端成功授权次数（心跳带走清零；UX-009 受控端知情提示；内存态不落盘）
     #[serde(default)]
     pub connect_events: u64,
+    /** REQ-003：只保存临时密码 PHC、服务端到期时间与单调 generation；明文永不进入中继。 */
+    #[serde(default)]
+    pub temporary_password: TemporaryPasswordRecord,
 }
 
 pub struct Registry {
@@ -123,6 +172,7 @@ impl Registry {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             connect_events: 0,
+            temporary_password: TemporaryPasswordRecord::default(),
         };
         self.next_port += 1;
         self.devices.push(record.clone());
@@ -155,6 +205,122 @@ impl Registry {
         dev.password_digest = new_password_digest.to_string();
         let _ = self.persist();
         true
+    }
+
+    /** REQ-003：以中继时钟签发/刷新一次性临时密码，generation 阻断并发旧验证结果。 */
+    pub fn issue_temporary_password(
+        &mut self,
+        device_id: &str,
+        digest: &str,
+        ttl_secs: u64,
+        now: u64,
+    ) -> Result<TemporaryPasswordIssued> {
+        let dev = self
+            .devices
+            .iter_mut()
+            .find(|d| d.id == device_id && !d.revoked)
+            .ok_or_else(|| anyhow::anyhow!("unknown-device"))?;
+        let generation = dev.temporary_password.generation.saturating_add(1);
+        let expires_at = now.saturating_add(ttl_secs);
+        dev.temporary_password = TemporaryPasswordRecord {
+            digest: digest.to_string(),
+            expires_at,
+            generation,
+            state: TemporaryCredentialState::Active,
+        };
+        self.persist()?;
+        Ok(TemporaryPasswordIssued { expires_at, generation })
+    }
+
+    /** 复制待验证 PHC 后立即释放 registry 锁；最终消费必须再次校验 generation。 */
+    pub fn temporary_password_candidate(
+        &mut self,
+        device_id: &str,
+        now: u64,
+    ) -> std::result::Result<TemporaryPasswordCandidate, TemporaryCredentialError> {
+        let mut expired = false;
+        let result = {
+            let dev = self
+                .devices
+                .iter_mut()
+                .find(|d| d.id == device_id && !d.revoked)
+                .ok_or(TemporaryCredentialError::UnknownDevice)?;
+            if dev.temporary_password.state == TemporaryCredentialState::Active
+                && now > dev.temporary_password.expires_at
+            {
+                dev.temporary_password.state = TemporaryCredentialState::Expired;
+                dev.temporary_password.digest.clear();
+                expired = true;
+            }
+            match dev.temporary_password.state {
+                TemporaryCredentialState::Active => Ok(TemporaryPasswordCandidate {
+                    digest: dev.temporary_password.digest.clone(),
+                    expires_at: dev.temporary_password.expires_at,
+                    generation: dev.temporary_password.generation,
+                }),
+                TemporaryCredentialState::None => Err(TemporaryCredentialError::NotConfigured),
+                TemporaryCredentialState::Expired => Err(TemporaryCredentialError::Expired),
+                TemporaryCredentialState::Consumed => Err(TemporaryCredentialError::Consumed),
+                TemporaryCredentialState::Revoked => Err(TemporaryCredentialError::Revoked),
+            }
+        };
+        if expired {
+            let _ = self.persist();
+        }
+        result
+    }
+
+    /** 慢哈希验证成功后的原子提交点：只有仍为同一 active generation 才能消费。 */
+    pub fn consume_temporary_password(
+        &mut self,
+        device_id: &str,
+        generation: u64,
+        now: u64,
+    ) -> std::result::Result<(), TemporaryCredentialError> {
+        let candidate = self.temporary_password_candidate(device_id, now)?;
+        if candidate.generation != generation {
+            return Err(TemporaryCredentialError::Superseded)
+        }
+        let dev = self
+            .devices
+            .iter_mut()
+            .find(|d| d.id == device_id && !d.revoked)
+            .ok_or(TemporaryCredentialError::UnknownDevice)?;
+        if dev.temporary_password.state != TemporaryCredentialState::Active
+            || dev.temporary_password.generation != generation
+        {
+            return Err(TemporaryCredentialError::Superseded)
+        }
+        dev.temporary_password.state = TemporaryCredentialState::Consumed;
+        dev.temporary_password.digest.clear();
+        let _ = self.persist();
+        Ok(())
+    }
+
+    pub fn revoke_temporary_password(&mut self, device_id: &str) -> bool {
+        let Some(dev) = self.devices.iter_mut().find(|d| d.id == device_id && !d.revoked) else {
+            return false;
+        };
+        if dev.temporary_password.state != TemporaryCredentialState::Active {
+            return false;
+        }
+        dev.temporary_password.state = TemporaryCredentialState::Revoked;
+        dev.temporary_password.digest.clear();
+        let _ = self.persist();
+        true
+    }
+
+    pub fn temporary_password_status(
+        &mut self,
+        device_id: &str,
+        now: u64,
+    ) -> std::result::Result<TemporaryPasswordRecord, TemporaryCredentialError> {
+        let _ = self.temporary_password_candidate(device_id, now);
+        self.devices
+            .iter()
+            .find(|d| d.id == device_id && !d.revoked)
+            .map(|d| d.temporary_password.clone())
+            .ok_or(TemporaryCredentialError::UnknownDevice)
     }
 
     pub fn active(&self) -> impl Iterator<Item = &DeviceRecord> {
@@ -277,6 +443,61 @@ mod tests {
         assert!(reg.verify_device_password("whale-test-pppp", "old-pw").is_none()); // 旧密码立即失效
         assert!(reg.verify_device_password("whale-test-pppp", "new-pw").is_some());
         assert!(!reg.update_password("ghost", &hash_password("x").unwrap()));
+    }
+
+    #[test]
+    fn temporary_password_is_consumed_once() {
+        let mut reg = temp_registry();
+        let (rec, _, _) = reg.register("whale-test-temp", &hash_password("long-pw").unwrap()).unwrap();
+        let digest = hash_password("WMT-ABCD-EFGH").unwrap();
+        let issued = reg.issue_temporary_password(&rec.id, &digest, 600, 1_000).unwrap();
+        assert_eq!(issued.expires_at, 1_600);
+
+        let candidate = reg.temporary_password_candidate(&rec.id, 1_100).unwrap();
+        assert_eq!(candidate.digest, digest);
+        assert!(reg.consume_temporary_password(&rec.id, candidate.generation, 1_100).is_ok());
+        assert_eq!(
+            reg.temporary_password_candidate(&rec.id, 1_100),
+            Err(TemporaryCredentialError::Consumed),
+        );
+    }
+
+    #[test]
+    fn temporary_password_generation_blocks_stale_verification() {
+        let mut reg = temp_registry();
+        let (rec, _, _) = reg.register("whale-test-refresh", &hash_password("long-pw").unwrap()).unwrap();
+        reg.issue_temporary_password(&rec.id, &hash_password("WMT-OLD1-OLD2").unwrap(), 600, 1_000).unwrap();
+        let stale = reg.temporary_password_candidate(&rec.id, 1_010).unwrap();
+        let current = reg.issue_temporary_password(&rec.id, &hash_password("WMT-NEW1-NEW2").unwrap(), 600, 1_020).unwrap();
+
+        assert_eq!(
+            reg.consume_temporary_password(&rec.id, stale.generation, 1_030),
+            Err(TemporaryCredentialError::Superseded),
+        );
+        assert!(reg.consume_temporary_password(&rec.id, current.generation, 1_030).is_ok());
+    }
+
+    #[test]
+    fn temporary_password_expiry_revoke_and_persistence_are_distinct() {
+        let dir = std::env::temp_dir().join(format!("whalemaid-relay-temp-state-{}", Uuid::new_v4()));
+        let file = dir.join("devices.json");
+        let mut reg = Registry::load(file.clone(), 5202).unwrap();
+        let (rec, _, _) = reg.register("whale-test-states", &hash_password("long-pw").unwrap()).unwrap();
+        reg.issue_temporary_password(&rec.id, &hash_password("WMT-TIME-OUT1").unwrap(), 60, 1_000).unwrap();
+        assert_eq!(
+            reg.temporary_password_candidate(&rec.id, 1_061),
+            Err(TemporaryCredentialError::Expired),
+        );
+
+        reg.issue_temporary_password(&rec.id, &hash_password("WMT-REVO-KED1").unwrap(), 60, 2_000).unwrap();
+        assert!(reg.revoke_temporary_password(&rec.id));
+        drop(reg);
+
+        let mut reloaded = Registry::load(file, 5202).unwrap();
+        assert_eq!(
+            reloaded.temporary_password_candidate(&rec.id, 2_010),
+            Err(TemporaryCredentialError::Revoked),
+        );
     }
 
     #[test]

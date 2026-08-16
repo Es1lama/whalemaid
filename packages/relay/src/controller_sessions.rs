@@ -2,10 +2,18 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    LongTerm,
+    Temporary,
+}
+
 struct ControllerSession {
     device_id: String,
     client_ip: String,
     expires_at: Instant,
+    credential_kind: CredentialKind,
+    temporary_generation: Option<u64>,
 }
 
 pub struct ControllerSessionStore {
@@ -18,25 +26,59 @@ impl ControllerSessionStore {
         Self { sessions: HashMap::new(), ttl }
     }
 
+    #[cfg(test)]
     pub fn issue(&mut self, token: String, device_id: String, client_ip: String) {
+        self.issue_with_ttl(token, device_id, client_ip, CredentialKind::LongTerm, self.ttl, None);
+    }
+
+    pub fn issue_with_ttl(
+        &mut self,
+        token: String,
+        device_id: String,
+        client_ip: String,
+        credential_kind: CredentialKind,
+        ttl: Duration,
+        temporary_generation: Option<u64>,
+    ) {
         self.prune();
         self.sessions.insert(token, ControllerSession {
             device_id,
             client_ip,
-            expires_at: Instant::now() + self.ttl,
+            expires_at: Instant::now() + ttl.min(self.ttl),
+            credential_kind,
+            temporary_generation,
         });
     }
 
-    pub fn validate(&mut self, token: &str, device_id: &str, client_ip: &str) -> bool {
+    pub fn validate_session(&mut self, token: &str, device_id: &str, client_ip: &str) -> Option<(CredentialKind, u64, Option<u64>)> {
         self.prune();
         self.sessions
             .get(token)
-            .map(|session| session.device_id == device_id && session.client_ip == client_ip)
-            .unwrap_or(false)
+            .filter(|session| session.device_id == device_id && session.client_ip == client_ip)
+            .map(|session| {
+                let remaining = session.expires_at.saturating_duration_since(Instant::now()).as_secs().max(1);
+                (session.credential_kind, remaining, session.temporary_generation)
+            })
+    }
+
+    #[cfg(test)]
+    pub fn validate_kind(&mut self, token: &str, device_id: &str, client_ip: &str) -> Option<CredentialKind> {
+        self.validate_session(token, device_id, client_ip).map(|(kind, _, _)| kind)
+    }
+
+    #[cfg(test)]
+    pub fn validate(&mut self, token: &str, device_id: &str, client_ip: &str) -> bool {
+        self.validate_session(token, device_id, client_ip).is_some()
     }
 
     pub fn clear_device(&mut self, device_id: &str) {
         self.sessions.retain(|_, session| session.device_id != device_id);
+    }
+
+    pub fn clear_temporary_device(&mut self, device_id: &str) {
+        self.sessions.retain(|_, session| {
+            session.device_id != device_id || session.credential_kind != CredentialKind::Temporary
+        });
     }
 
     fn prune(&mut self) {
@@ -75,6 +117,40 @@ mod tests {
         let mut sessions = ControllerSessionStore::new(Duration::ZERO);
         sessions.issue("t1".into(), "WHALE-A".into(), "127.0.0.1".into());
         assert!(!sessions.validate("t1", "WHALE-A", "127.0.0.1"));
+    }
+
+    #[test]
+    fn temporary_session_keeps_kind_and_uses_bounded_ttl() {
+        let mut sessions = store();
+        sessions.issue_with_ttl(
+            "temp".into(),
+            "WHALE-A".into(),
+            "127.0.0.1".into(),
+            CredentialKind::Temporary,
+            Duration::from_secs(60),
+            Some(1),
+        );
+        assert_eq!(
+            sessions.validate_kind("temp", "WHALE-A", "127.0.0.1"),
+            Some(CredentialKind::Temporary),
+        );
+    }
+
+    #[test]
+    fn clearing_temporary_sessions_preserves_long_term_sessions() {
+        let mut sessions = store();
+        sessions.issue("long".into(), "WHALE-A".into(), "127.0.0.1".into());
+        sessions.issue_with_ttl(
+            "temp".into(),
+            "WHALE-A".into(),
+            "127.0.0.1".into(),
+            CredentialKind::Temporary,
+            Duration::from_secs(60),
+            Some(1),
+        );
+        sessions.clear_temporary_device("WHALE-A");
+        assert!(sessions.validate("long", "WHALE-A", "127.0.0.1"));
+        assert!(!sessions.validate("temp", "WHALE-A", "127.0.0.1"));
     }
 
     #[test]

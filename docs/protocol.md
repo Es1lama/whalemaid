@@ -26,8 +26,9 @@
 1. **设备编号**：宿主插件生成 `WHALE-XXXX-XXXX`（base32 排除易混字符），受控端设置页展示。
 2. **长期密码（REQ-002）**：宿主生成随机 12 字符；注册时只上报 **scrypt PHC 哈希**（ln=14,r=8,p=1，Node/Rust 跨语言互验）；重生成 = 清凭据重新注册（旧哈希随注册更新即失效）。
 3. **每设备凭据（SEC-001）**：安装码注册签发随机 256-bit 凭据（受控端落盘 0600），用于隧道签发/心跳/自吊销。
-4. **主控端授权（SEC-002/004b）**：首次 `/_whalemaid/connect` 使用编号+密码（**失败尝试限速 5/min、错 5 次锁 5 分钟；成功验证不占窗口预算**）完成 scrypt 后，返回随机 256-bit `sessionToken`（15min、可重复、绑定客户端 IP+设备）；主控端只在进程内保存该令牌，后续逐请求用它快速签单连接一次性 grant，隧道入口仍逐条消费 grant。密码只走 TLS 密文，服务端只持 PHC；令牌失效后回退密码认证。
-5. 吊销即时生效：设备条目移除 → 清除该设备 `sessionToken` 与在途 grant → 隧道热重载断开 → 凭据心跳 401 → 主控端 grant 拒发；密码轮换同样清除会话令牌与 grant。
+4. **主控端授权（SEC-002/004b）**：首次 `/_whalemaid/connect` 使用编号+密码（**失败尝试限速 5/min、错 5 次锁 5 分钟；成功验证不占窗口预算**）完成 scrypt 后，返回随机 256-bit `sessionToken`（至多 15min、可重复、绑定客户端 IP+设备）；主控端只在进程内保存该令牌，后续逐请求用它快速签单连接一次性 grant，隧道入口仍逐条消费 grant。密码只走 TLS 密文，服务端只持 PHC。
+5. **临时密码（REQ-003/UX-005/007）**：受控插件凭每设备凭据提交 PHC 与 `ttlSec`，中继以自己的时钟限制 TTL 为 60..86400 秒。主控端必须显式发送 `credentialKind:"temporary"`，不得在长期/临时之间猜测或失败降级；慢哈希验证后按当前 generation 原子单次消费，换取不超过密码剩余 TTL 的临时 `sessionToken`，供官方 UI 的多资源请求重复签 grant。刷新/撤销会清临时 session 与待消费 grant；每次临时 session 换 grant 仍复核 generation 与 consumed 状态，阻断刷新竞态。临时密码过期/消费/撤销后必须重新生成，不能回退复用。
+6. 吊销即时生效：设备条目移除 → 清除该设备 `sessionToken` 与在途 grant → 隧道热重载断开 → 凭据心跳 401 → 主控端 grant 拒发；长期密码轮换同样清除会话令牌与 grant。
 
 ## PROTO-004 会话通道（E2E 主通道）
 
@@ -49,7 +50,7 @@
 |---|---|---|
 | 官方 /api | 官方信封 `result:{ok:false,error:{code,message}}` | 业务错误恒 200（官方契约） |
 | 官方信任栅栏 | HTTP 403 | 跨站/非信任权威（DNS-rebinding 防御） |
-| 中继 /connect | 401 / 429 / 423 | 密码或 sessionToken 错误、设备未知 / 限速 / 锁定（SEC-002） |
+| 中继 /connect | 401 / 404 / 409 / 429 / 423 | `INVALID_CREDENTIAL`、`CREDENTIAL_EXPIRED`、`CREDENTIAL_REVOKED` / `DEVICE_NOT_FOUND` / `CREDENTIAL_CONSUMED`、`CREDENTIAL_SUPERSEDED` / `RATE_LIMITED` / `LOCKED`；临时凭据不降级到长期认证 |
 | 隧道入口 | 断连（无响应） | grant 无效/过期/已消费/设备不匹配——不泄露细节 |
 
 ## PROTO-009 吊销与审计
@@ -62,11 +63,13 @@
 | 端点 | 语义 | 认证 |
 |---|---|---|
 | `POST /_whalemaid/devices` | 受控端注册（编号+密码哈希） | x-install-code（可消费安装令牌：默认单次+可选TTL，耗尽/过期 401） |
-| `POST /_whalemaid/devices/:id/heartbeat` | 心跳（45s 在线窗口） | 每设备凭据 |
+| `POST /_whalemaid/devices/:id/heartbeat` | 心跳（45s 在线窗口）+ 临时密码状态（不含明文/PHC） | 每设备凭据 |
 | `POST /_whalemaid/devices/:id/tunnel` | 隧道签发（token+serverPublicKey，不轮换） | 每设备凭据 |
 | `GET /_whalemaid/devices/:id/status` | 公开在线查询（不回路由秘密，限速） | 无 |
 | `DELETE /_whalemaid/devices/:id` | 吊销（自吊销或管理令牌） | 凭据/admin |
-| `POST /_whalemaid/connect` | 主控端连接：编号+密码（scrypt 验证，失败限速+锁定，成功不占窗口预算）或 sessionToken（900s，绑定 IP+设备）→ 一次性 grant（2min 单次消费；响应无设备 IP/端口） | 无 |
+| `POST /_whalemaid/connect` | 主控端连接：显式 `credentialKind` 的长期/临时密码（scrypt 验证，失败限速+锁定）或 sessionToken（至多 900s，绑定 IP+设备；临时 session 另绑定 generation）→ 一次性 grant（2min 单次消费；响应无设备 IP/端口） | 无 |
+| `POST /_whalemaid/devices/:id/temporary-password` | 签发/刷新临时密码 PHC，TTL 60..86400 秒；清旧临时 session/grant | 每设备凭据 |
+| `DELETE /_whalemaid/devices/:id/temporary-password` | 撤销临时密码并清临时 session/grant | 每设备凭据 |
 | `GET /_whalemaid/tunnel-ws` | WSS 隧道入口（宽松泛洪上限 600/min/IP；grant 单次消费+TTL 防滥用，逐请求建连是合法高频） | grant |
 | `GET /_whalemaid/devices` | 管理列表 | admin |
 | `POST /_whalemaid/admin/install-tokens` | 签发安装令牌（明文仅返回一次） | admin |

@@ -1,12 +1,12 @@
 // SPEC: docs/security-audit.md#SEC-001/002/003 控制面 API：安装码注册、每设备凭据、/connect 密码匹配+限速（隧道 token 注册后固定，授权在受控端网关侧）
 // SPEC: docs/threat-model.md#TM-005 心跳/在线状态/吊销
 use crate::config::RelayConfig;
-use crate::controller_sessions::ControllerSessionStore;
+use crate::controller_sessions::{ControllerSessionStore, CredentialKind};
 use crate::grants::GrantStore;
 use crate::install_tokens::InstallTokenStore;
 use crate::limiter::{Attempt, Limiter};
 use crate::rathole::{render_server_config, RatholeSidecar};
-use crate::registry::{verify_password, Registry};
+use crate::registry::{verify_password, Registry, TemporaryCredentialError, TemporaryCredentialState};
 use axum::{
     extract::connect_info::ConnectInfo,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -60,6 +60,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_whalemaid/devices/:id/status", get(device_status))
         .route("/_whalemaid/devices/:id/tunnel", post(tunnel))
         .route("/_whalemaid/devices/:id/password", post(update_password))
+        .route("/_whalemaid/devices/:id/temporary-password", post(issue_temporary_password).delete(revoke_temporary_password))
         .route("/_whalemaid/connect", post(connect))
         .route("/_whalemaid/tunnel-ws", get(tunnel_ws))
         .route("/_whalemaid/admin/install-tokens", post(issue_install_token).get(list_install_tokens))
@@ -87,6 +88,42 @@ fn client_ip(state: &AppState, headers: &HeaderMap, peer: Option<std::net::Socke
 
 fn unauthorized() -> (StatusCode, Json<Value>) {
     (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" })))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn credential_kind_name(kind: CredentialKind) -> &'static str {
+    match kind {
+        CredentialKind::LongTerm => "longTerm",
+        CredentialKind::Temporary => "temporary",
+    }
+}
+
+fn temporary_state_name(state: &TemporaryCredentialState) -> &'static str {
+    match state {
+        TemporaryCredentialState::None => "none",
+        TemporaryCredentialState::Active => "active",
+        TemporaryCredentialState::Consumed => "consumed",
+        TemporaryCredentialState::Revoked => "revoked",
+        TemporaryCredentialState::Expired => "expired",
+    }
+}
+
+fn temporary_credential_error(error: TemporaryCredentialError) -> (StatusCode, Json<Value>) {
+    let (status, code) = match error {
+        TemporaryCredentialError::UnknownDevice => (StatusCode::NOT_FOUND, "DEVICE_NOT_FOUND"),
+        TemporaryCredentialError::Expired => (StatusCode::UNAUTHORIZED, "CREDENTIAL_EXPIRED"),
+        TemporaryCredentialError::Consumed => (StatusCode::CONFLICT, "CREDENTIAL_CONSUMED"),
+        TemporaryCredentialError::Revoked => (StatusCode::UNAUTHORIZED, "CREDENTIAL_REVOKED"),
+        TemporaryCredentialError::Superseded => (StatusCode::CONFLICT, "CREDENTIAL_SUPERSEDED"),
+        TemporaryCredentialError::NotConfigured => (StatusCode::UNAUTHORIZED, "INVALID_CREDENTIAL"),
+    };
+    (status, Json(json!({ "error": code })))
 }
 
 async fn reload_config(s: &Arc<AppState>) -> Result<(), String> {
@@ -123,7 +160,7 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
     if s.registry.lock().await.active().any(|d| d.id == device_id) {
         return Err((StatusCode::CONFLICT, Json(json!({ "error": "device-already-registered" }))))
     }
-    if !s.install_tokens.lock().await.verify_and_consume(&code) {
+    if !s.install_tokens.lock().await.verify_and_consume(code) {
         return Err(unauthorized())
     }
     let (record, credential, tunnel_token) = s
@@ -143,7 +180,7 @@ async fn register(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
 /// SEC-003：只做主控授权与寻址，**不轮换隧道 token**（token 是受控端侧固定凭据）。
 /// SEC-004b：每次认证后仍签发**短时一次性 grant**（2min、单次消费）；响应不含设备服务端口。
 async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, body: String) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let b: serde_json::Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
+    let b: Value = serde_json::from_str(&body).map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
     let device_id = b.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let password = b.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let supplied_session = b.get("sessionToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -152,49 +189,85 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     }
     let ip = client_ip(&s, &headers, Some(peer));
 
-    let (service, port, session_token) = if !supplied_session.is_empty() {
+    let (service, port, session_token, credential_kind, session_ttl_sec) = if !supplied_session.is_empty() {
         let key = format!("session-token:{ip}:{device_id}");
         match s.limiter.lock().await.check(&key) {
-            Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" })))),
-            Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "locked" })))),
+            Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "RATE_LIMITED" })))),
+            Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "LOCKED" })))),
             Attempt::Allowed => {}
         }
-        let valid = s.controller_sessions.lock().await.validate(&supplied_session, &device_id, &ip);
-        let route = if valid {
+        let session = s.controller_sessions.lock().await.validate_session(&supplied_session, &device_id, &ip);
+        let session_current = match session {
+            Some((CredentialKind::LongTerm, _, None)) => true,
+            Some((CredentialKind::Temporary, _, Some(generation))) => {
+                s.registry.lock().await.temporary_password_status(&device_id, now_secs())
+                    .map(|value| {
+                        value.generation == generation
+                            && value.state == TemporaryCredentialState::Consumed
+                    })
+                    .unwrap_or(false)
+            }
+            _ => false,
+        };
+        let route = if session_current {
             let reg = s.registry.lock().await;
             let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port));
             found
         } else {
             None
         };
-        let Some((service, port)) = route else {
+        let (Some((kind, remaining, _)), Some((service, port))) = (session, route) else {
             s.limiter.lock().await.record_fail(&key);
-            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong session token or unknown device" }))))
+            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_SESSION" }))))
         };
         s.limiter.lock().await.record_success(&key);
-        (service, port, supplied_session)
+        (service, port, supplied_session, kind, remaining)
     } else {
-        let key = format!("{ip}:{device_id}");
+        let requested_kind = match b.get("credentialKind").and_then(|v| v.as_str()).unwrap_or("longTerm") {
+            "longTerm" => CredentialKind::LongTerm,
+            "temporary" => CredentialKind::Temporary,
+            _ => return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "credentialKind must be longTerm or temporary" })))),
+        };
+        let key = format!("{ip}:{device_id}:{}", credential_kind_name(requested_kind));
         match s.limiter.lock().await.check(&key) {
-            Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" })))),
-            Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "locked" })))),
+            Attempt::RateLimited => return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "RATE_LIMITED" })))),
+            Attempt::Locked => return Err((StatusCode::LOCKED, Json(json!({ "error": "LOCKED" })))),
             Attempt::Allowed => {}
         }
-        // scrypt 是慢 CPU 任务：只在短锁内复制候选记录，验证放 blocking 池并限并发。
-        let candidate = {
-            let reg = s.registry.lock().await;
-            let found = reg.active()
-                .find(|dev| dev.id == device_id)
-                .map(|dev| (dev.password_digest.clone(), dev.service.clone(), dev.port));
-            found
+
+        let (password_digest, service, port, temporary_generation, temporary_expires_at) = match requested_kind {
+            CredentialKind::LongTerm => {
+                let candidate = {
+                    let reg = s.registry.lock().await;
+                    let found = reg.active()
+                        .find(|dev| dev.id == device_id)
+                        .map(|dev| (dev.password_digest.clone(), dev.service.clone(), dev.port));
+                    found
+                };
+                let Some((digest, service, port)) = candidate else {
+                    s.limiter.lock().await.record_fail(&key);
+                    return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_CREDENTIAL" }))))
+                };
+                (digest, service, port, None, None)
+            }
+            CredentialKind::Temporary => {
+                let candidate = s.registry.lock().await.temporary_password_candidate(&device_id, now_secs())
+                    .map_err(temporary_credential_error)?;
+                let route = {
+                    let reg = s.registry.lock().await;
+                    let found = reg.active().find(|dev| dev.id == device_id).map(|dev| (dev.service.clone(), dev.port));
+                    found
+                };
+                let Some((service, port)) = route else {
+                    return Err(temporary_credential_error(TemporaryCredentialError::UnknownDevice))
+                };
+                (candidate.digest, service, port, Some(candidate.generation), Some(candidate.expires_at))
+            }
         };
-        let Some((password_digest, service, port)) = candidate else {
-            s.limiter.lock().await.record_fail(&key);
-            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong password or unknown device" }))))
-        };
+
         let permit = s.password_verify_slots.acquire().await.map_err(|_| (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "password verifier unavailable" })),
+            Json(json!({ "error": "PASSWORD_VERIFIER_UNAVAILABLE" })),
         ))?;
         let password_for_verify = password.clone();
         let digest_for_verify = password_digest.clone();
@@ -202,21 +275,43 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
             .await
             .unwrap_or(false);
         drop(permit);
-        // 验证期间可能发生吊销或密码轮换；签会话前确认候选记录仍是当前值。
-        let still_current = {
-            let reg = s.registry.lock().await;
-            let current = reg.active().any(|dev| dev.id == device_id && dev.password_digest == password_digest);
-            current
-        };
-        if !verified || !still_current {
+        if !verified {
             s.limiter.lock().await.record_fail(&key);
-            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "wrong password or unknown device" }))))
+            return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_CREDENTIAL" }))))
         }
+
+        let session_ttl = match requested_kind {
+            CredentialKind::LongTerm => {
+                let still_current = {
+                    let reg = s.registry.lock().await;
+                    let current = reg.active().any(|dev| dev.id == device_id && dev.password_digest == password_digest);
+                    current
+                };
+                if !still_current {
+                    s.limiter.lock().await.record_fail(&key);
+                    return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_CREDENTIAL" }))))
+                }
+                900
+            }
+            CredentialKind::Temporary => {
+                let generation = temporary_generation.expect("temporary generation");
+                s.registry.lock().await.consume_temporary_password(&device_id, generation, now_secs())
+                    .map_err(temporary_credential_error)?;
+                temporary_expires_at.unwrap_or(0).saturating_sub(now_secs()).clamp(1, 900)
+            }
+        };
         s.limiter.lock().await.record_success(&key);
-        { let mut reg = s.registry.lock().await; reg.note_connect(&device_id); }
+        { s.registry.lock().await.note_connect(&device_id); }
         let token = Uuid::new_v4().simple().to_string();
-        s.controller_sessions.lock().await.issue(token.clone(), device_id.clone(), ip.clone());
-        (service, port, token)
+        s.controller_sessions.lock().await.issue_with_ttl(
+            token.clone(),
+            device_id.clone(),
+            ip.clone(),
+            requested_kind,
+            std::time::Duration::from_secs(session_ttl),
+            temporary_generation,
+        );
+        (service, port, token, requested_kind, session_ttl)
     };
 
     let grant = Uuid::new_v4().simple().to_string();
@@ -224,7 +319,8 @@ async fn connect(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     let tunnel_port = s.config.tunnel_listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(9443);
     Ok((StatusCode::OK, Json(json!({
         "deviceId": device_id, "service": service,
-        "sessionToken": session_token, "sessionTtlSec": 900,
+        "credentialKind": credential_kind_name(credential_kind),
+        "sessionToken": session_token, "sessionTtlSec": session_ttl_sec,
         "grant": grant, "grantTtlSec": 120, "tunnelPort": tunnel_port,
     }))))
 }
@@ -248,6 +344,60 @@ async fn update_password(State(s): State<Arc<AppState>>, headers: HeaderMap, axu
     s.controller_sessions.lock().await.clear_device(&id);
     s.grants.lock().await.clear_device(&id);
     Ok((StatusCode::OK, Json(json!({ "ok": true }))))
+}
+
+/** REQ-003：受控插件凭设备凭据签发/刷新短期密码；TTL 只采用中继时钟并限制为 1 分钟到 24 小时。 */
+async fn issue_temporary_password(
+    State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: String,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
+    let authorized = { s.registry.lock().await.authenticate_credential(cred).map(|d| d.id == id).unwrap_or(false) };
+    if !authorized {
+        return Err(unauthorized())
+    }
+    let b: Value = serde_json::from_str(&body)
+        .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad body" }))))?;
+    let digest = b.get("passwordDigest").and_then(|v| v.as_str()).unwrap_or("");
+    let ttl_sec = b.get("ttlSec").and_then(|v| v.as_u64()).unwrap_or(0);
+    if !digest.starts_with("$scrypt$") || digest.len() > 512 {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid passwordDigest" }))))
+    }
+    if !(60..=86_400).contains(&ttl_sec) {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "ttlSec must be between 60 and 86400" }))))
+    }
+    let issued = s
+        .registry
+        .lock()
+        .await
+        .issue_temporary_password(&id, digest, ttl_sec, now_secs())
+        .map_err(|_| (StatusCode::NOT_FOUND, Json(json!({ "error": "DEVICE_NOT_FOUND" }))))?;
+    s.controller_sessions.lock().await.clear_temporary_device(&id);
+    s.grants.lock().await.clear_device(&id);
+    Ok((StatusCode::OK, Json(json!({
+        "state": "active",
+        "expiresAt": issued.expires_at,
+        "generation": issued.generation,
+    }))))
+}
+
+/** REQ-003：撤销尚未消费的短期密码，并清除该设备的临时控制会话与待消费 grant。 */
+async fn revoke_temporary_password(
+    State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let Some(cred) = bearer(&headers) else { return Err(unauthorized()) };
+    let authorized = { s.registry.lock().await.authenticate_credential(cred).map(|d| d.id == id).unwrap_or(false) };
+    if !authorized {
+        return Err(unauthorized())
+    }
+    let revoked = s.registry.lock().await.revoke_temporary_password(&id);
+    s.controller_sessions.lock().await.clear_temporary_device(&id);
+    s.grants.lock().await.clear_device(&id);
+    Ok((StatusCode::OK, Json(json!({ "state": if revoked { "revoked" } else { "unchanged" } }))))
 }
 
 /// 被控端隧道签发：凭据鉴权，返回当前隧道 token（不轮换——token 一经注册固定，SEC-003）
@@ -312,7 +462,16 @@ async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::ext
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown-device" }))))
     }
     let connect_events = reg.take_connect_events(&id);
-    Ok((StatusCode::OK, Json(json!({ "ok": true, "connectEvents": connect_events }))))
+    let temporary = reg.temporary_password_status(&id, now_secs()).ok();
+    Ok((StatusCode::OK, Json(json!({
+        "ok": true,
+        "connectEvents": connect_events,
+        "temporaryPassword": temporary.map(|value| json!({
+            "state": temporary_state_name(&value.state),
+            "expiresAt": value.expires_at,
+            "generation": value.generation,
+        })),
+    }))))
 }
 
 /// audit#4（D-026）：主控端按设备编号查询状态——Phase A 无账号，设备列表 = 主控端本机记忆 + 本端点逐个查询；
@@ -408,4 +567,189 @@ async fn ws_tunnel_session(state: Arc<AppState>, mut socket: WebSocket) {
         }
     }
     let _ = socket.close().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller_sessions::{ControllerSessionStore, CredentialKind};
+    use crate::grants::GrantStore;
+    use crate::install_tokens::InstallTokenStore;
+    use crate::limiter::Limiter;
+    use crate::registry::{hash_password, Registry};
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    async fn test_app() -> (Router, Arc<AppState>, String, String) {
+        let dir = std::env::temp_dir().join(format!("whalemaid-relay-api-test-{}", Uuid::new_v4()));
+        let mut registry = Registry::load(dir.join("devices.json"), 5202).unwrap();
+        let device_id = "WHALE-TEST-TEMP".to_string();
+        let (_, credential, _) = registry
+            .register(&device_id, &hash_password("LONG-PASSWORD").unwrap())
+            .unwrap();
+        let state = Arc::new(AppState {
+            registry: Mutex::new(registry),
+            config: RelayConfig::default(),
+            sidecar: Mutex::new(RatholeSidecar::new()),
+            admin_token: "admin".into(),
+            install_tokens: Mutex::new(InstallTokenStore::load(dir.join("install-tokens.json")).unwrap()),
+            limiter: Mutex::new(Limiter::new(50, Duration::from_secs(60), 50, Duration::from_secs(60))),
+            password_verify_slots: Semaphore::new(4),
+            ws_limiter: Mutex::new(Limiter::new(50, Duration::from_secs(60), 50, Duration::from_secs(60))),
+            trusted_proxy: false,
+            max_devices: 0,
+            noise_private_key: "test-private".into(),
+            noise_public_key: "test-public".into(),
+            controller_sessions: Mutex::new(ControllerSessionStore::new(Duration::from_secs(900))),
+            grants: Mutex::new(GrantStore::new(Duration::from_secs(120))),
+        });
+        (router(state.clone()), state, device_id, credential)
+    }
+
+    async fn call(app: &Router, method: &str, path: &str, body: Value, credential: Option<&str>) -> (StatusCode, Value) {
+        let mut request = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json");
+        if let Some(credential) = credential {
+            request = request.header("authorization", format!("Bearer {credential}"));
+        }
+        let request = request
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 43123))))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes) }));
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn temporary_password_http_flow_is_one_time_but_session_can_issue_more_grants() {
+        let (app, _state, device_id, credential) = test_app().await;
+        let digest = hash_password("WMT-ABCD-EFGH").unwrap();
+        let (issue_status, issue) = call(
+            &app,
+            "POST",
+            &format!("/_whalemaid/devices/{device_id}/temporary-password"),
+            json!({ "passwordDigest": digest, "ttlSec": 600 }),
+            Some(&credential),
+        ).await;
+        assert_eq!(issue_status, StatusCode::OK);
+        assert_eq!(issue["state"], "active");
+
+        let (connect_status, connected) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "password": "WMT-ABCD-EFGH", "credentialKind": "temporary" }),
+            None,
+        ).await;
+        assert_eq!(connect_status, StatusCode::OK);
+        assert_eq!(connected["credentialKind"], "temporary");
+        let session_token = connected["sessionToken"].as_str().unwrap().to_string();
+
+        let (second_status, second) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "password": "WMT-ABCD-EFGH", "credentialKind": "temporary" }),
+            None,
+        ).await;
+        assert_eq!(second_status, StatusCode::CONFLICT);
+        assert_eq!(second["error"], "CREDENTIAL_CONSUMED");
+
+        let (resume_status, resumed) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "sessionToken": session_token }),
+            None,
+        ).await;
+        assert_eq!(resume_status, StatusCode::OK);
+        assert_eq!(resumed["credentialKind"], "temporary");
+        assert!(resumed["grant"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn refresh_and_revoke_clear_temporary_sessions_without_breaking_long_password() {
+        let (app, state, device_id, credential) = test_app().await;
+        let endpoint = format!("/_whalemaid/devices/{device_id}/temporary-password");
+        let (_, first_issue) = call(
+            &app,
+            "POST",
+            &endpoint,
+            json!({ "passwordDigest": hash_password("WMT-ONE1-TWO2").unwrap(), "ttlSec": 600 }),
+            Some(&credential),
+        ).await;
+        let (_, connected) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "password": "WMT-ONE1-TWO2", "credentialKind": "temporary" }),
+            None,
+        ).await;
+        let old_session = connected["sessionToken"].as_str().unwrap().to_string();
+
+        let (refresh_status, _) = call(
+            &app,
+            "POST",
+            &endpoint,
+            json!({ "passwordDigest": hash_password("WMT-NEW1-TWO2").unwrap(), "ttlSec": 600 }),
+            Some(&credential),
+        ).await;
+        assert_eq!(refresh_status, StatusCode::OK);
+        let (old_status, _) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "sessionToken": old_session }),
+            None,
+        ).await;
+        assert_eq!(old_status, StatusCode::UNAUTHORIZED);
+
+        // 模拟旧认证在 refresh 清理之后才落 session；generation 复核仍必须拒绝。
+        state.controller_sessions.lock().await.issue_with_ttl(
+            "raced-old-session".into(),
+            device_id.clone(),
+            "127.0.0.1".into(),
+            CredentialKind::Temporary,
+            Duration::from_secs(60),
+            first_issue["generation"].as_u64(),
+        );
+        let (raced_status, _) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "sessionToken": "raced-old-session" }),
+            None,
+        ).await;
+        assert_eq!(raced_status, StatusCode::UNAUTHORIZED);
+
+        let (revoke_status, _) = call(&app, "DELETE", &endpoint, json!({}), Some(&credential)).await;
+        assert_eq!(revoke_status, StatusCode::OK);
+        let (revoked_status, revoked) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "password": "WMT-NEW1-TWO2", "credentialKind": "temporary" }),
+            None,
+        ).await;
+        assert_eq!(revoked_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(revoked["error"], "CREDENTIAL_REVOKED");
+
+        let (long_status, long) = call(
+            &app,
+            "POST",
+            "/_whalemaid/connect",
+            json!({ "deviceId": device_id, "password": "LONG-PASSWORD", "credentialKind": "longTerm" }),
+            None,
+        ).await;
+        assert_eq!(long_status, StatusCode::OK);
+        assert_eq!(long["credentialKind"], "longTerm");
+    }
 }
