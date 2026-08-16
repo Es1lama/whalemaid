@@ -39,9 +39,10 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         do {
-            let l = try NWListener(using: params, on: port)
+            let nwPort = NWEndpoint.Port(rawValue: port) ?? .any
+            let l = try NWListener(using: params, on: nwPort)
             l.newConnectionHandler = { [weak self] conn in self?.handleConnection(conn) }
-            l.stateUpdateHandler = { [weak self] state in
+            l.stateUpdateHandler = { [weak self] (state: NWListener.State) in
                 switch state {
                 case .failed:
                     // 固定端口被占用 → 回退随机端口
@@ -86,7 +87,7 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
                         headers[line[..<idx].trimmingCharacters(in: .whitespaces).lowercased()] =
                             line[line.index(after: idx)...].trimmingCharacters(in: .whitespaces)
                     }
-                    let isWs = (headers["upgrade"]?.lowercased() == "websocket")
+                    // WS 升级判定在 dispatch 的 /api/events 分支处理
                     let contentLength = Int(headers["content-length"] ?? "0") ?? 0
                     if contentLength > 0 {
                         let bodyStart = sep + 4
@@ -206,7 +207,7 @@ final class TunnelProxy: NSObject, URLSessionDelegate, URLSessionWebSocketDelega
                 self.respondJson(conn, status: 502, body: "{\"error\":\"connect \\(code)\"}")
                 return
             }
-            var head = TunnelPure.buildTunnelRequest(method: method, uri: uri, headers: headers, body: body)
+            let head = TunnelPure.buildTunnelRequest(method: method, uri: uri, headers: headers, body: body)
             self.wssTunnel(server: srv, grant: grant, requestHead: head, body: body) { raw in
                 let (status, respHeaders, payload0) = TunnelPure.parseResponse(raw)
                 let payload = (status == 200 && (respHeaders["content-type"] ?? "").contains("text/html"))
