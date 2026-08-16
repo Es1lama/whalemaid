@@ -111,6 +111,7 @@
     let snapshot = {configured:false,server:'',devices:[]}
     let currentView = ''
     let statusTimer = 0
+    let statusRefreshInFlight = null
 
     async function api(path, options = {}) {
       const response = await fetch(path, {headers:{'content-type':'application/json','x-whalemaid-controller':controllerToken},...options})
@@ -189,7 +190,8 @@
 
     async function refreshStatuses() {
       if (currentView !== 'home') return
-      await Promise.all(snapshot.devices.map(async device => {
+      if (statusRefreshInFlight) return statusRefreshInFlight
+      statusRefreshInFlight = Promise.all(snapshot.devices.map(async device => {
         const row = document.querySelector(`[data-device="${CSS.escape(device.deviceId)}"]`)
         if (!row) return
         const dot = row.querySelector('.dot')
@@ -200,7 +202,8 @@
           dot.className = `dot ${status.online ? 'online' : 'offline'}`
           label.textContent = status.online ? '在线' : status.registered ? '离线' : '设备不存在'
         } catch (_) { dot.className = 'dot'; label.textContent = '状态未知' }
-      }))
+      })).finally(() => { statusRefreshInFlight = null })
+      return statusRefreshInFlight
     }
 
     async function connectSaved(deviceId) {

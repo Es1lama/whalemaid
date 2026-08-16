@@ -21,6 +21,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -93,6 +94,7 @@ class ProxyCore(
     private val managementToken = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
         ByteArray(32).also(SecureRandom()::nextBytes),
     )
+    private val relayClients = ConcurrentHashMap<String, OkHttpClient>()
 
     private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -138,18 +140,21 @@ class ProxyCore(
     }
 
     fun clientFor(server: String): OkHttpClient {
-        val endpoint = URI("https://$server")
-        val host = endpoint.host ?: throw IllegalArgumentException("INVALID_SERVER")
-        val port = endpoint.port.takeIf { it > 0 } ?: 9080
-        val manager = pinningTrustManager(host, port)
-        val sslCtx = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(manager), SecureRandom()) }
-        return OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .sslSocketFactory(sslCtx.socketFactory, manager)
-            // 主机名校验冗余（中继自签证书 SAN 为 whalemaid-relay）；身份由指纹强制
-            .hostnameVerifier { _, _ -> true }
-            .build()
+        val authority = normalizeServer(server)
+        return relayClients.computeIfAbsent(authority) {
+            val endpoint = URI("https://$authority")
+            val host = endpoint.host ?: throw IllegalArgumentException("INVALID_SERVER")
+            val port = endpoint.port.takeIf { it > 0 } ?: 9080
+            val manager = pinningTrustManager(host, port)
+            val sslCtx = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(manager), SecureRandom()) }
+            OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .sslSocketFactory(sslCtx.socketFactory, manager)
+                // 主机名校验冗余（中继自签证书 SAN 为 whalemaid-relay）；身份由指纹强制
+                .hostnameVerifier { _, _ -> true }
+                .build()
+        }
     }
 
     fun relayRequest(server: String, path: String, method: String = "GET", body: String? = null, headers: Map<String, String> = emptyMap()): Pair<Int, String> {
@@ -241,6 +246,12 @@ class ProxyCore(
     fun stop() {
         localServer?.stop()
         localServer = null
+        relayClients.values.forEach { client ->
+            client.dispatcher.cancelAll()
+            client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdown()
+        }
+        relayClients.clear()
         session.clear()
     }
 
