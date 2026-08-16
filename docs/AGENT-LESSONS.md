@@ -17,7 +17,7 @@
 
 5. 我就是因为**把网络协议层的字节当"大概就行"**，导致犯下同一类错误三次：①NanoHTTPD 状态行 = "HTTP/1.1 " + getDescription()，自定义 IStatus 的描述必须自带状态码；②响应 Content-Type 硬编码 octet-stream，触发浏览器对 JS 模块的严格 MIME 检查导致白屏；③WS 桥把上联的 HTTP 101 响应头当帧转发、把文本帧重打包成二进制帧。希望后续不再因为同样的原因犯错——HTTP 状态行/MIME/WS 帧的每一字节都有语义，写这类代码前先读依赖库实现（NanoHTTPD/OkHttp 源码），并写字节级单测（本项目 TunnelHttpTest/WsFrames 即此产物）。
 
-6. 我就是因为**把"跑通过一次"的环境参数和诡异行为留在脑子里**，导致犯下**下一会话全部重新踩坑**的错误（gradle 的 JAVA_HOME/GRADLE_USER_HOME/ANDROID_USER_HOME/local.properties；adb 必须用 HOME=.android-home/home；BlueStacks 桥"前台才通、file-sync 坏、断开重连丢 reverse"；Kotlin 编译守护进程被沙盒挡要开 in-process）。希望后续不再因为同样的原因犯错——任何环境参数与怪异行为，跑通的当下就写进文档/脚本（已沉淀在 .tmp/bs-*.sh、gradle.properties、本文档）。
+6. 我就是因为**把"跑通过一次"的环境参数和诡异行为留在脑子里**，导致犯下**下一会话全部重新踩坑**的错误（gradle 的 JAVA_HOME/GRADLE_USER_HOME/ANDROID_USER_HOME/local.properties；adb 必须用 HOME=.android-home/home；BlueStacks 桥"前台才通、file-sync 坏、断开重连丢 reverse"；编译守护进程被沙盒挡要开 in-process）。希望后续不再因为同样的原因犯错——任何环境参数与怪异行为，跑通的当下就写进文档/脚本（已沉淀在 .tmp/bs-*.sh、gradle.properties、本文档）。
 
 7. 我就是因为**编辑文件不看上下文**，导致犯下**一次 edit 把两行并成一行产生编译错误、一次 edit 误删既有测试块**的错误。希望后续不再因为同样的原因犯错——每次编辑后立刻编译+跑测试，不许带着编译错误进入下一步。
 
