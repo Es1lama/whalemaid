@@ -196,10 +196,23 @@ function normalizeFingerprint(value) {
 }
 function pinnedRequest(url, options) {
   return new Promise((resolve, reject) => {
-    const req = https.request(url, { method: options.method, headers: options.headers, rejectUnauthorized: false }, (res) => {
+    const agent = new https.Agent({ keepAlive: false, maxCachedSessions: 0 });
+    let verified = false;
+    const req = https.request(url, {
+      method: options.method,
+      headers: options.headers,
+      rejectUnauthorized: false,
+      agent
+    }, (res) => {
+      if (!verified) {
+        res.destroy();
+        req.destroy(new Error("\u65E0\u6CD5\u9A8C\u8BC1\u4E2D\u7EE7\u8BC1\u4E66\uFF0C\u62D2\u7EDD\u8FDE\u63A5\uFF08SEC-001 \u9632\u4E2D\u95F4\u4EBA\uFF09"));
+        return;
+      }
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
+        agent.destroy();
         const text = Buffer.concat(chunks).toString("utf8");
         resolve({
           status: res.statusCode ?? 0,
@@ -209,16 +222,26 @@ function pinnedRequest(url, options) {
       });
     });
     req.on("socket", (socket) => {
-      socket.on("secureConnect", () => {
+      socket.once("secureConnect", () => {
         const tlsSocket = socket;
-        const cert = tlsSocket.getPeerCertificate(true);
-        const fp = createHash("sha256").update(cert.raw ?? Buffer.alloc(0)).digest("hex");
-        if (options.fingerprint && fp !== normalizeFingerprint(options.fingerprint)) {
-          req.destroy(new Error(`\u8BC1\u4E66\u6307\u7EB9\u4E0D\u5339\u914D\uFF08\u9884\u671F ${options.fingerprint.slice(0, 16)}\u2026 \u5B9E\u9645 ${fp.slice(0, 16)}\u2026\uFF09\uFF0C\u62D2\u7EDD\u8FDE\u63A5\uFF08SEC-001 \u9632\u4E2D\u95F4\u4EBA\uFF09`));
+        const raw = tlsSocket.getPeerCertificate(true).raw;
+        if (!raw?.length) {
+          req.destroy(new Error("\u4E2D\u7EE7\u672A\u63D0\u4F9B\u53EF\u56FA\u5B9A\u7684\u5B8C\u6574\u8BC1\u4E66\uFF0C\u62D2\u7EDD\u8FDE\u63A5\uFF08SEC-001 \u9632\u4E2D\u95F4\u4EBA\uFF09"));
+          return;
         }
+        const actual = createHash("sha256").update(raw).digest("hex");
+        const expected = normalizeFingerprint(options.fingerprint);
+        if (!expected || actual !== expected) {
+          req.destroy(new Error(`\u8BC1\u4E66\u6307\u7EB9\u4E0D\u5339\u914D\uFF08\u9884\u671F ${options.fingerprint.slice(0, 16)}\u2026 \u5B9E\u9645 ${actual.slice(0, 16)}\u2026\uFF09\uFF0C\u62D2\u7EDD\u8FDE\u63A5\uFF08SEC-001 \u9632\u4E2D\u95F4\u4EBA\uFF09`));
+          return;
+        }
+        verified = true;
       });
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      agent.destroy();
+      reject(error);
+    });
     if (options.body) req.write(options.body);
     req.end();
   });

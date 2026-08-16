@@ -1,6 +1,9 @@
 // RelayClient 凭据策略单测（bug 根因回归）：只有中继明确拒绝凭据（401/403/404）才允许清空已保存凭据；
 // 网络瞬断/5xx/限流必须保留凭据退避重试——否则清凭据后重注册必撞 409 device-already-registered，设备永久离线。
+import { X509Certificate } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
+import { createServer } from 'node:https'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -27,6 +30,23 @@ const binding: RelayBinding = {
   credential: 'cred-new',
   serverPublicKey: 'pubkey',
 }
+
+const TLS_CERT = `-----BEGIN CERTIFICATE-----
+MIIBZDCCAQqgAwIBAgIUeOmQGeU0WKUb54T0bWk7NRykx4UwCgYIKoZIzj0EAwIw
+ITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWduZWQgY2VydDAgFw03NTAxMDEwMDAw
+MDBaGA80MDk2MDEwMTAwMDAwMFowITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWdu
+ZWQgY2VydDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABOy/6X+HLqtxslsCi/rm
+TZs0/9m71xg5ZARATZEqOBcPagIWRfV/uZ61ilreqzDySLZI31UkBKotJyV/Qu4C
+BxujHjAcMBoGA1UdEQQTMBGCD3doYWxlbWFpZC1yZWxheTAKBggqhkjOPQQDAgNI
+ADBFAiEAutrveOEoy/ggSeThQBRkQEgbdwChhFRQAa52lLz81iwCIENmtSVAhUHW
+3f3CkuFhYmsIlXDZOSyVCcdc1BYsp6ju
+-----END CERTIFICATE-----`
+
+const TLS_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsNHmUEuR4AWJyvNj
+4Gufq6awNe9UF/1BMbM0ieg+ciChRANCAATsv+l/hy6rcbJbAov65k2bNP/Zu9cY
+OWQEQE2RKjgXD2oCFkX1f7metYpa3qsw8ki2SN9VJASqLSclf0LuAgcb
+-----END PRIVATE KEY-----`
 
 function makeCfg(over: Partial<RelayClientConfig> = {}): RelayClientConfig {
   return {
@@ -56,6 +76,31 @@ describe('relay certificate fingerprint normalization', () => {
   it('accepts the uppercase colon-delimited OpenSSL form used in deployment docs', () => {
     expect(normalizeFingerprint('08:4B:25:C5:8F')).toBe('084b25c58f')
     expect(normalizeFingerprint('084b25c58f')).toBe('084b25c58f')
+  })
+
+  it('pins every fresh TLS connection without reusing an empty resumed certificate', async () => {
+    const server = createServer({ cert: TLS_CERT, key: TLS_KEY }, (_req, res) => {
+      res.setHeader('connection', 'close')
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ state: 'active', expiresAt: 3000, generation: 2 }))
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    const relayUrl = `https://127.0.0.1:${address.port}`
+    const fingerprint = new X509Certificate(TLS_CERT).fingerprint256
+    try {
+      const client = new RelayClient(makeCfg({ relayUrl, relayFingerprint: fingerprint, savedCredential: 'cred-live' }), () => void 0)
+      await expect(client.issueTemporaryPassword('WMT-FIRST-PASS', 600)).resolves.toMatchObject({ state: 'active' })
+      await expect(client.issueTemporaryPassword('WMT-SECOND-PASS', 600)).resolves.toMatchObject({ state: 'active' })
+
+      const rejected = new RelayClient(makeCfg({ relayUrl, relayFingerprint: '00'.repeat(32), savedCredential: 'cred-live' }), () => void 0)
+      await expect(rejected.issueTemporaryPassword('WMT-WRONG-PIN', 600)).rejects.toThrow(/证书指纹不匹配/)
+    } finally {
+      await new Promise<void>(resolve => { server.close(() => resolve()) })
+    }
   })
 })
 

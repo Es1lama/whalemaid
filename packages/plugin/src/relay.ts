@@ -78,13 +78,26 @@ export function normalizeFingerprint(value: string): string {
 
 /** SEC-001：固定指纹的 HTTPS 请求。
  * 刻意 rejectUnauthorized:false——CA 链校验被"证书 SHA-256 指纹固定"替代（SSH TOFU 模型）；
- * 指纹不匹配立即断连，故不因跳过 CA 校验而降低安全性。 */
+ * 每个请求禁用连接和 TLS session 复用，确保握手总能提供完整证书供固定校验。 */
 function pinnedRequest(url: string, options: { method: string; headers: Record<string, string>; body?: string; fingerprint: string }): Promise<HttpsResponse> {
   return new Promise((resolve, reject) => {
-    const req = https.request(url, { method: options.method, headers: options.headers, rejectUnauthorized: false }, (res) => {
+    const agent = new https.Agent({ keepAlive: false, maxCachedSessions: 0 })
+    let verified = false
+    const req = https.request(url, {
+      method: options.method,
+      headers: options.headers,
+      rejectUnauthorized: false,
+      agent,
+    }, (res) => {
+      if (!verified) {
+        res.destroy()
+        req.destroy(new Error('无法验证中继证书，拒绝连接（SEC-001 防中间人）'))
+        return
+      }
       const chunks: Buffer[] = []
       res.on('data', (c: Buffer) => chunks.push(c))
       res.on('end', () => {
+        agent.destroy()
         const text = Buffer.concat(chunks).toString('utf8')
         resolve({
           status: res.statusCode ?? 0,
@@ -94,16 +107,26 @@ function pinnedRequest(url: string, options: { method: string; headers: Record<s
       })
     })
     req.on('socket', (socket) => {
-      socket.on('secureConnect', () => {
+      socket.once('secureConnect', () => {
         const tlsSocket = socket as import('node:tls').TLSSocket
-        const cert = tlsSocket.getPeerCertificate(true)
-        const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
-        if (options.fingerprint && fp !== normalizeFingerprint(options.fingerprint)) {
-          req.destroy(new Error(`证书指纹不匹配（预期 ${options.fingerprint.slice(0, 16)}… 实际 ${fp.slice(0, 16)}…），拒绝连接（SEC-001 防中间人）`))
+        const raw = tlsSocket.getPeerCertificate(true).raw
+        if (!raw?.length) {
+          req.destroy(new Error('中继未提供可固定的完整证书，拒绝连接（SEC-001 防中间人）'))
+          return
         }
+        const actual = createHash('sha256').update(raw).digest('hex')
+        const expected = normalizeFingerprint(options.fingerprint)
+        if (!expected || actual !== expected) {
+          req.destroy(new Error(`证书指纹不匹配（预期 ${options.fingerprint.slice(0, 16)}… 实际 ${actual.slice(0, 16)}…），拒绝连接（SEC-001 防中间人）`))
+          return
+        }
+        verified = true
       })
     })
-    req.on('error', reject)
+    req.on('error', (error) => {
+      agent.destroy()
+      reject(error)
+    })
     if (options.body) req.write(options.body)
     req.end()
   })
