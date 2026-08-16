@@ -74,6 +74,12 @@ async fn main() -> Result<()> {
         admin_token,
         install_tokens: Mutex::new(install_tokens),
         limiter: Mutex::new(limiter::Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(300))),
+        status_limiter: Mutex::new(limiter::Limiter::new(
+            api::STATUS_REQUESTS_PER_MINUTE,
+            Duration::from_secs(60),
+            api::STATUS_REQUESTS_PER_MINUTE,
+            Duration::from_secs(60),
+        )),
         password_verify_slots: tokio::sync::Semaphore::new(8),
         ws_limiter: Mutex::new(limiter::Limiter::new(600, Duration::from_secs(60), 600, Duration::from_secs(60))),
         noise_private_key,

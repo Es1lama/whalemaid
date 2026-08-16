@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 
 pub const HEARTBEAT_TIMEOUT_SECS: u64 = 45;
+pub const STATUS_REQUESTS_PER_MINUTE: u32 = 120;
 
 pub struct AppState {
     pub registry: Mutex<Registry>,
@@ -35,6 +36,8 @@ pub struct AppState {
     pub install_tokens: Mutex<InstallTokenStore>,
     /// /connect 限速与锁定（SEC-002）
     pub limiter: Mutex<Limiter>,
+    /// 已知设备状态轮询限速；与密码尝试隔离，预算必须覆盖控制端 6 秒轮询和多设备列表。
+    pub status_limiter: Mutex<Limiter>,
     /// scrypt 验证并发上限：验证在 blocking 池执行，但不能让攻击请求无限占用 CPU/内存。
     pub password_verify_slots: Semaphore,
     /// WSS 隧道入口泛洪上限（宽松；grant 单次消费+TLL 已防滥用，逐请求建连是合法高频）
@@ -503,7 +506,7 @@ async fn heartbeat(State(s): State<Arc<AppState>>, headers: HeaderMap, axum::ext
 /// 不回 IP/端口/token（DESIGN §6.3 不泄露约束）；按 IP 限速防编号枚举；未知与离线区分（registered 位）
 async fn device_status(State(s): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, headers: HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let ip = client_ip(&s, &headers, Some(peer));
-    if s.limiter.lock().await.consume(&format!("status:{ip}")) != Attempt::Allowed {
+    if s.status_limiter.lock().await.consume(&format!("status:{ip}")) != Attempt::Allowed {
         return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate-limited" }))))
     }
     let (registered, online, last_seen_at) = {
@@ -646,7 +649,13 @@ mod tests {
             sidecar: Mutex::new(RatholeSidecar::new()),
             admin_token: "admin".into(),
             install_tokens: Mutex::new(InstallTokenStore::load(dir.join("install-tokens.json")).unwrap()),
-            limiter: Mutex::new(Limiter::new(50, Duration::from_secs(60), 50, Duration::from_secs(60))),
+            limiter: Mutex::new(Limiter::new(5, Duration::from_secs(60), 5, Duration::from_secs(60))),
+            status_limiter: Mutex::new(Limiter::new(
+                STATUS_REQUESTS_PER_MINUTE,
+                Duration::from_secs(60),
+                STATUS_REQUESTS_PER_MINUTE,
+                Duration::from_secs(60),
+            )),
             password_verify_slots: Semaphore::new(4),
             ws_limiter: Mutex::new(Limiter::new(50, Duration::from_secs(60), 50, Duration::from_secs(60))),
             trusted_proxy: false,
@@ -676,6 +685,18 @@ mod tests {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes) }));
         (status, value)
+    }
+
+    #[tokio::test]
+    async fn public_status_budget_covers_controller_polling_without_relaxing_auth_limits() {
+        let (app, _state, device_id, _credential) = test_app().await;
+        let endpoint = format!("/_whalemaid/devices/{device_id}/status");
+
+        for _ in 0..12 {
+            let (status, body) = call(&app, "GET", &endpoint, json!({}), None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["registered"], true);
+        }
     }
 
     #[tokio::test]
