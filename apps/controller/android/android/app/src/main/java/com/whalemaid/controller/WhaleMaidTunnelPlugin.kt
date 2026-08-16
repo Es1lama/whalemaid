@@ -27,6 +27,11 @@ class WhaleMaidTunnelPlugin : Plugin() {
     }
 }
 
+object WhaleMaidRuntime {
+    @Volatile var core: ProxyCore? = null
+    @Volatile var port: Int = 0
+}
+
 /** 启动代理核心并把 WebView 指向本地代理（同源 = 页面相对请求全走隧道）；MainActivity 与插件共用 */
 fun startWhaleMaidCore(
     context: Context,
@@ -35,8 +40,17 @@ fun startWhaleMaidCore(
     fallbackToRandomPort: Boolean = true,
     onReady: (Int) -> Unit,
 ) {
+    WhaleMaidRuntime.core?.let {
+        val port = WhaleMaidRuntime.port
+        onReady(port)
+        if (navigateWebView) {
+            activity?.runOnUiThread {
+                (activity as? BridgeActivity)?.bridge?.webView?.loadUrl("http://127.0.0.1:$port/")
+            }
+        }
+        return
+    }
     val prefs = context.getSharedPreferences("whalemaid-tunnel", Context.MODE_PRIVATE)
-    // 只持久化 relay 证书 pin；设备密码与 sessionToken 均只驻留当前 ProxyCore 进程。
     context.getSharedPreferences("whalemaid-state", Context.MODE_PRIVATE).edit().clear().apply()
     val core = ProxyCore(
         pinStore = object : PinStore {
@@ -44,11 +58,14 @@ fun startWhaleMaidCore(
             override fun put(key: String, value: String) { prefs.edit().putString(key, value).apply() }
         },
         pageHtml = {
-            runCatching { activity?.assets?.open("public/index.html")?.use { String(it.readBytes()) } }
+            runCatching { context.assets.open("public/index.html").use { String(it.readBytes()) } }
                 .getOrNull() ?: "<html><body>WhaleMaid</body></html>"
         },
+        deviceStore = AndroidControllerDeviceStore(context),
     )
     core.start(fallbackToRandomPort) { port ->
+        WhaleMaidRuntime.core = core
+        WhaleMaidRuntime.port = port
         onReady(port)
         if (navigateWebView) {
             activity?.runOnUiThread {

@@ -36,6 +36,17 @@ class TunnelHttpTest {
     }
 
     @Test
+    fun routeLocalDeviceManagementBeforeAndAfterConnecting() {
+        for (connected in listOf(false, true)) {
+            assertEquals(TunnelHttp.Route.STATE, TunnelHttp.route("/_ctrl/state", "GET", connected))
+            assertEquals(TunnelHttp.Route.CONFIGURE, TunnelHttp.route("/_ctrl/configure", "POST", connected))
+            assertEquals(TunnelHttp.Route.CONNECT_SAVED, TunnelHttp.route("/_ctrl/connect-saved", "POST", connected))
+            assertEquals(TunnelHttp.Route.DEVICE, TunnelHttp.route("/_ctrl/device", "DELETE", connected))
+            assertEquals(TunnelHttp.Route.DISCONNECT, TunnelHttp.route("/_ctrl/disconnect", "POST", connected))
+        }
+    }
+
+    @Test
     fun routeTunnelForEverythingElse() {
         assertEquals(TunnelHttp.Route.TUNNEL, TunnelHttp.route("/plugins/x.js", "GET", true))
         assertEquals(TunnelHttp.Route.TUNNEL, TunnelHttp.route("/api/session.list", "POST", true))

@@ -8,14 +8,24 @@ import java.io.ByteArrayOutputStream
  */
 object TunnelHttp {
     const val CTRL_CONNECT_PATH = "/_ctrl/connect"
+    const val CTRL_CONNECT_SAVED_PATH = "/_ctrl/connect-saved"
     const val CTRL_STATUS_PATH = "/_ctrl/status"
+    const val CTRL_STATE_PATH = "/_ctrl/state"
+    const val CTRL_CONFIGURE_PATH = "/_ctrl/configure"
+    const val CTRL_DEVICE_PATH = "/_ctrl/device"
+    const val CTRL_DISCONNECT_PATH = "/_ctrl/disconnect"
 
-    enum class Route { MANAGEMENT, CONNECT, STATUS, TUNNEL }
+    enum class Route { MANAGEMENT, CONNECT, CONNECT_SAVED, STATUS, STATE, CONFIGURE, DEVICE, DISCONNECT, TUNNEL }
 
-    /** 路由决策：POST /_ctrl/connect → 连接端点；POST /_ctrl/status → 连接前在线状态查询；未连接 GET / → 设备管理页；其余 → 隧道 */
+    /** 本地控制路由始终由壳处理；只有连接后的官方 UI/API/WS 进入隧道。 */
     fun route(uri: String, method: String, connected: Boolean): Route = when {
         uri == CTRL_CONNECT_PATH && method == "POST" -> Route.CONNECT
+        uri == CTRL_CONNECT_SAVED_PATH && method == "POST" -> Route.CONNECT_SAVED
         uri == CTRL_STATUS_PATH && method == "POST" && !connected -> Route.STATUS
+        uri == CTRL_STATE_PATH && method == "GET" -> Route.STATE
+        uri == CTRL_CONFIGURE_PATH && method == "POST" -> Route.CONFIGURE
+        uri == CTRL_DEVICE_PATH && method == "DELETE" -> Route.DEVICE
+        uri == CTRL_DISCONNECT_PATH && method == "POST" -> Route.DISCONNECT
         uri == "/" && method == "GET" && !connected -> Route.MANAGEMENT
         else -> Route.TUNNEL
     }

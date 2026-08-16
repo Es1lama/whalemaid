@@ -1,6 +1,7 @@
 package com.whalemaid.controller
 
 import android.os.Bundle
+import androidx.activity.OnBackPressedCallback
 import com.getcapacitor.BridgeActivity
 
 /** 主控端入口：启动本地隧道代理并把 WebView 指向代理（同源 = 页面相对请求全走隧道） */
@@ -16,5 +17,17 @@ class MainActivity : BridgeActivity() {
             fallbackToRandomPort = false,
         ) { port -> check(port == ProxyCore.FIXED_PORT) }
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val core = WhaleMaidRuntime.core
+                if (core?.session?.connected == true) {
+                    core.disconnect()
+                    bridge.webView.loadUrl("http://127.0.0.1:${WhaleMaidRuntime.port}/")
+                    return
+                }
+                isEnabled = false
+                this@MainActivity.onBackPressedDispatcher.onBackPressed()
+            }
+        })
     }
 }

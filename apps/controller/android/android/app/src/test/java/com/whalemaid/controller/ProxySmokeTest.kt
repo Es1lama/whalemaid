@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  */
 class ProxySmokeTest {
 
-    private val pageHtml = "<html><body>WM-MGMT-PAGE</body></html>"
+    private val pageHtml = "<html><body>WM-MGMT-PAGE TOKEN=__WHALEMAID_LOCAL_TOKEN__</body></html>"
 
     @Test
     fun fullLoopLocally() {
@@ -38,17 +38,21 @@ class ProxySmokeTest {
             try {
                 val client = OkHttpClient.Builder()
                     .connectTimeout(10, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
+                var managementToken = ""
                 fun get(path: String): Pair<Int, String> =
                     client.newCall(Request.Builder().url("http://127.0.0.1:$port$path").build())
                         .execute().use { it.code to (it.body?.string() ?: "") }
-                fun post(path: String, body: String): Pair<Int, String> =
-                    client.newCall(Request.Builder().url("http://127.0.0.1:$port$path")
-                        .post(body.toRequestBody("application/json".toMediaType())).build())
+                fun post(path: String, body: String): Pair<Int, String> {
+                    val request = Request.Builder().url("http://127.0.0.1:$port$path")
+                    if (path.startsWith("/_ctrl/")) request.header("x-whalemaid-controller", managementToken)
+                    return client.newCall(request.post(body.toRequestBody("application/json".toMediaType())).build())
                         .execute().use { it.code to (it.body?.string() ?: "") }
+                }
 
                 // 1. 未连接 GET / → 管理页
                 val (c1, b1) = get("/")
-                results += if (c1 == 200 && b1.contains("WM-MGMT-PAGE")) "PASS 管理页" else "FAIL 管理页 $c1 ${b1.take(60)}"
+                managementToken = Regex("TOKEN=([A-Za-z0-9_-]{40,})").find(b1)?.groupValues?.get(1) ?: ""
+                results += if (c1 == 200 && b1.contains("WM-MGMT-PAGE") && managementToken.isNotEmpty()) "PASS 管理页" else "FAIL 管理页 $c1 ${b1.take(60)}"
 
                 // 2. 连接
                 val (c2, b2) = post("/_ctrl/connect", """{"server":"127.0.0.1:9180","deviceId":"WHALE-D68Z-7HBK","password":"W4saWTTZM4Mr","credentialKind":"longTerm"}""")

@@ -11,10 +11,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response as OkResponse
 import okhttp3.WebSocket as OkWebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.net.URI
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
@@ -45,6 +47,7 @@ interface PinStore {
 class ProxyCore(
     private val pinStore: PinStore,
     private val pageHtml: () -> String,
+    private val deviceStore: ControllerDeviceStore = InMemoryControllerDeviceStore(),
 ) {
     companion object {
         const val MAX_BODY = 64L * 1024 * 1024
@@ -86,6 +89,10 @@ class ProxyCore(
     }
 
     val session = ControllerCredentialSession()
+    @Volatile private var localServer: NanoWSD? = null
+    private val managementToken = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+        ByteArray(32).also(SecureRandom()::nextBytes),
+    )
 
     private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -131,8 +138,9 @@ class ProxyCore(
     }
 
     fun clientFor(server: String): OkHttpClient {
-        val host = server.substringBefore(":")
-        val port = TunnelHttp.controlPortOf(server)
+        val endpoint = URI("https://$server")
+        val host = endpoint.host ?: throw IllegalArgumentException("INVALID_SERVER")
+        val port = endpoint.port.takeIf { it > 0 } ?: 9080
         val manager = pinningTrustManager(host, port)
         val sslCtx = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(manager), SecureRandom()) }
         return OkHttpClient.Builder()
@@ -151,6 +159,89 @@ class ProxyCore(
         clientFor(server).newCall(rb.build()).execute().use { resp ->
             return Pair(resp.code, resp.body?.string() ?: "")
         }
+    }
+
+    internal fun normalizeServer(raw: String): String {
+        val withoutScheme = raw.trim().removePrefix("https://").removePrefix("http://").trimEnd('/')
+        require(withoutScheme.isNotEmpty()) { "SERVER_REQUIRED" }
+        val uri = URI("https://$withoutScheme")
+        require(uri.host != null && uri.userInfo == null && uri.rawQuery == null && uri.rawFragment == null) { "INVALID_SERVER" }
+        require(uri.rawPath.isNullOrEmpty()) { "INVALID_SERVER" }
+        require(uri.port == -1 || uri.port in 1..65535) { "INVALID_SERVER" }
+        return uri.rawAuthority
+    }
+
+    private fun authenticate(
+        server: String,
+        deviceId: String,
+        password: String,
+        credentialKind: CredentialKind,
+        remember: Boolean,
+    ): Pair<Int, String> {
+        val normalizedServer = normalizeServer(server)
+        val normalizedDevice = deviceId.uppercase()
+        if (normalizedDevice.isEmpty() || password.isEmpty()) return 400 to """{"error":"deviceId/password required"}"""
+        val (statusCode, statusBody) = relayRequest(normalizedServer, "/_whalemaid/devices/$normalizedDevice/status")
+        if (statusCode != 200) return 502 to """{"error":"RELAY_UNREACHABLE"}"""
+        val status = JSONObject(statusBody)
+        if (!status.optBoolean("registered")) return 404 to """{"error":"DEVICE_NOT_FOUND"}"""
+        if (!status.optBoolean("online")) return 503 to """{"error":"DEVICE_OFFLINE"}"""
+        val payload = JSONObject()
+            .put("deviceId", normalizedDevice)
+            .put("password", password)
+            .put("credentialKind", credentialKind.wire)
+        val (authCode, authBody) = relayRequest(normalizedServer, "/_whalemaid/connect", "POST", payload.toString())
+        if (authCode != 200) return authCode to authBody
+        val auth = JSONObject(authBody)
+        val returnedKind = runCatching { CredentialKind.fromWire(auth.optString("credentialKind")) }.getOrNull()
+        val authToken = auth.optString("sessionToken")
+        val hostAuthority = auth.optString("hostAuthority")
+        if (returnedKind != credentialKind || authToken.isEmpty() || !TunnelHttp.isValidHostAuthority(hostAuthority)) {
+            return 502 to """{"error":"INVALID_RELAY_RESPONSE"}"""
+        }
+        session.commit(normalizedServer, normalizedDevice, password, credentialKind, authToken, hostAuthority)
+        if (remember && credentialKind == CredentialKind.LONG_TERM) {
+            runCatching { deviceStore.rememberLongTerm(normalizedServer, normalizedDevice, password) }.getOrElse {
+                session.clear()
+                return 500 to """{"error":"SECURE_STORAGE_UNAVAILABLE"}"""
+            }
+        }
+        return 200 to """{"ok":true,"deviceId":"$normalizedDevice","credentialKind":"${credentialKind.wire}"}"""
+    }
+
+    private fun managementPageHtml(): String = pageHtml().replace("__WHALEMAID_LOCAL_TOKEN__", managementToken)
+
+    private fun isManagementAuthorized(request: IHTTPSession): Boolean {
+        val supplied = request.headers["x-whalemaid-controller"] ?: ""
+        return MessageDigest.isEqual(supplied.toByteArray(), managementToken.toByteArray())
+    }
+
+    internal fun managementState(): String {
+        val devices = JSONArray()
+        deviceStore.devices().forEach { device ->
+            devices.put(JSONObject().apply {
+                put("deviceId", device.deviceId)
+                put("server", device.server)
+                put("lastConnectedAt", device.lastConnectedAt)
+            })
+        }
+        return JSONObject().apply {
+            put("configured", deviceStore.configuredServer() != null)
+            put("server", deviceStore.configuredServer() ?: "")
+            put("devices", devices)
+            put("connected", session.connected)
+            put("activeDeviceId", session.deviceId)
+        }.toString()
+    }
+
+    fun disconnect() {
+        session.clear()
+    }
+
+    fun stop() {
+        localServer?.stop()
+        localServer = null
+        session.clear()
     }
 
     /** 官方 HTML 头部注入 WebView 兼容 polyfill（幂等） */
@@ -216,7 +307,7 @@ class ProxyCore(
 
     /** 启动本地代理；onReady 回调端口（Android 侧负责把 WebView 指向 http://127.0.0.1:<port>/） */
     fun start(fallbackToRandomPort: Boolean = true, onReady: (Int) -> Unit) {
-        fun newServer(port: Int): NanoWSD = object : NanoWSD(port) {
+        fun newServer(port: Int): NanoWSD = object : NanoWSD("127.0.0.1", port) {
             override fun openWebSocket(handshake: IHTTPSession): NanoWSD.WebSocket? {
                 if (handshake.uri.startsWith("/api/events")) {
                     println("[WhaleMaidTunnel] 事件WS握手 uri=${handshake.uri} hdrs=${handshake.headers.keys.joinToString(",")}")
@@ -234,53 +325,64 @@ class ProxyCore(
                 return try {
                     val uri = session.uri
                     val method = session.method?.name ?: "GET"
-                    when (TunnelHttp.route(uri, method, this@ProxyCore.session.connected)) {
+                    val route = TunnelHttp.route(uri, method, this@ProxyCore.session.connected)
+                    if (route !in setOf(TunnelHttp.Route.MANAGEMENT, TunnelHttp.Route.TUNNEL) && !isManagementAuthorized(session)) {
+                        return jsonResponse(403, """{"error":"LOCAL_MANAGEMENT_FORBIDDEN"}""")
+                    }
+                    when (route) {
                         TunnelHttp.Route.MANAGEMENT -> {
-                            NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/html; charset=utf-8", pageHtml())
+                            NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/html; charset=utf-8", managementPageHtml())
                         }
-                        // UX-013：连接前查设备在线状态（UX 不再盲试）；只回 registered/online 两个布尔，不回路由秘密
+                        TunnelHttp.Route.STATE -> jsonResponse(200, managementState())
+                        TunnelHttp.Route.CONFIGURE -> {
+                            val json = JSONObject(String(readBody(session) ?: ByteArray(0), Charsets.UTF_8))
+                            val serverAddr = normalizeServer(json.optString("server"))
+                            val (code, _) = relayRequest(serverAddr, "/health")
+                            if (code != 200) return jsonResponse(502, """{"error":"RELAY_UNREACHABLE"}""")
+                            deviceStore.configureServer(serverAddr)
+                            jsonResponse(200, """{"ok":true}""")
+                        }
+                        // UX-013：只回 registered/online 两个布尔，不向页面泄露路由权威。
                         TunnelHttp.Route.STATUS -> {
-                            val bodyBytes = readBody(session) ?: ByteArray(0)
-                            val json = JSONObject(String(bodyBytes, Charsets.UTF_8))
-                            val serverAddr = json.optString("server").removePrefix("https://").removePrefix("http://").trimEnd('/')
-                            val deviceId = json.optString("deviceId")
-                            if (serverAddr.isEmpty() || deviceId.isEmpty()) return jsonResponse(400, """{"error":"server/deviceId 必填"}""")
+                            val json = JSONObject(String(readBody(session) ?: ByteArray(0), Charsets.UTF_8))
+                            val serverAddr = normalizeServer(json.optString("server").ifBlank { deviceStore.configuredServer() ?: "" })
+                            val deviceId = json.optString("deviceId").uppercase()
+                            if (deviceId.isEmpty()) return jsonResponse(400, """{"error":"DEVICE_ID_REQUIRED"}""")
                             val (code, respBody) = relayRequest(serverAddr, "/_whalemaid/devices/$deviceId/status")
-                            if (code != 200) return jsonResponse(502, """{"error":"服务端不可达: $code"}""")
+                            if (code != 200) return jsonResponse(502, """{"error":"RELAY_UNREACHABLE"}""")
                             val st = JSONObject(respBody)
                             jsonResponse(200, """{"registered":${st.optBoolean("registered")},"online":${st.optBoolean("online")}}""")
                         }
                         TunnelHttp.Route.CONNECT -> {
-                            val bodyBytes = readBody(session) ?: ByteArray(0)
-                            val json = JSONObject(String(bodyBytes, Charsets.UTF_8))
-                            val serverAddr = json.optString("server").removePrefix("https://").removePrefix("http://").trimEnd('/')
-                            val deviceId = json.optString("deviceId").uppercase()
-                            val password = json.optString("password")
+                            val json = JSONObject(String(readBody(session) ?: ByteArray(0), Charsets.UTF_8))
                             val credentialKind = runCatching { CredentialKind.fromWire(json.optString("credentialKind")) }
                                 .getOrElse { return jsonResponse(400, """{"error":"credentialKind must be longTerm or temporary"}""") }
-                            if (serverAddr.isEmpty() || deviceId.isEmpty() || password.isEmpty()) return jsonResponse(400, """{"error":"server/deviceId/password/credentialKind 必填"}""")
-                            val (code, respBody) = relayRequest(serverAddr, "/_whalemaid/devices/$deviceId/status")
-                            if (code != 200) return jsonResponse(502, """{"error":"服务端不可达: $code"}""")
-                            val st = JSONObject(respBody)
-                            if (!st.optBoolean("registered")) return jsonResponse(404, """{"error":"DEVICE_NOT_FOUND"}""")
-                            if (!st.optBoolean("online")) return jsonResponse(503, """{"error":"DEVICE_OFFLINE"}""")
-                            val authPayload = JSONObject()
-                                .put("deviceId", deviceId)
-                                .put("password", password)
-                                .put("credentialKind", credentialKind.wire)
-                            val (authCode, authBody) = relayRequest(serverAddr, "/_whalemaid/connect", "POST", authPayload.toString())
-                            if (authCode != 200) return jsonResponse(authCode, authBody)
-                            val auth = JSONObject(authBody)
-                            val returnedKind = runCatching { CredentialKind.fromWire(auth.optString("credentialKind")) }
-                                .getOrElse { return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""") }
-                            if (returnedKind != credentialKind) return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
-                            val authToken = auth.optString("sessionToken")
-                            val hostAuthority = auth.optString("hostAuthority")
-                            if (authToken.isEmpty() || !TunnelHttp.isValidHostAuthority(hostAuthority)) {
-                                return jsonResponse(502, """{"error":"INVALID_RELAY_RESPONSE"}""")
-                            }
-                            this@ProxyCore.session.commit(serverAddr, deviceId, password, credentialKind, authToken, hostAuthority)
-                            jsonResponse(200, """{"ok":true,"credentialKind":"${credentialKind.wire}"}""")
+                            val serverAddr = json.optString("server").ifBlank { deviceStore.configuredServer() ?: "" }
+                            val (code, body) = authenticate(
+                                serverAddr,
+                                json.optString("deviceId"),
+                                json.optString("password"),
+                                credentialKind,
+                                json.optBoolean("remember", credentialKind == CredentialKind.LONG_TERM),
+                            )
+                            jsonResponse(code, body)
+                        }
+                        TunnelHttp.Route.CONNECT_SAVED -> {
+                            val json = JSONObject(String(readBody(session) ?: ByteArray(0), Charsets.UTF_8))
+                            val saved = deviceStore.credential(json.optString("deviceId"))
+                                ?: return jsonResponse(404, """{"error":"SAVED_CREDENTIAL_NOT_FOUND"}""")
+                            val (code, body) = authenticate(saved.server, saved.deviceId, saved.password, CredentialKind.LONG_TERM, true)
+                            jsonResponse(code, body)
+                        }
+                        TunnelHttp.Route.DEVICE -> {
+                            val json = JSONObject(String(readBody(session) ?: ByteArray(0), Charsets.UTF_8))
+                            val removed = deviceStore.remove(json.optString("deviceId"))
+                            if (this@ProxyCore.session.deviceId == json.optString("deviceId").uppercase()) disconnect()
+                            jsonResponse(200, """{"removed":$removed}""")
+                        }
+                        TunnelHttp.Route.DISCONNECT -> {
+                            disconnect()
+                            jsonResponse(200, """{"ok":true}""")
                         }
                         TunnelHttp.Route.TUNNEL -> {
                             val bodyBytes = readBody(session)
@@ -331,6 +433,7 @@ class ProxyCore(
             server = newServer(0)
             server.start(0, false)
         }
+        localServer = server
         onReady(server.listeningPort)
     }
 
