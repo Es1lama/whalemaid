@@ -151,3 +151,14 @@
 2. **D-023 原生桥（相机/麦克风/文件）与 D-026 账号设备列表**仍未实现（已如实标注在协议 v3 与 UX 清单）。
 3. 语音/视觉（D-023 延伸）未实现，协议中标注为 V1 里程碑（未冒充已完成）。
 
+## 第五轮：用户原话对齐审计（2026-08-17，主代理执行）
+
+> 方法：逐字对照 docs/OWNER-DIRECTIVES.md §原文留存新增 D-031/D-032；证据取实际运行结果，不把设计文档当交付。
+
+### 逐条对照（原文摘录 | 实际结果证据 | 判定）
+
+| 指令 | 用户原话（摘录） | 实际结果（证据） | 判定 |
+|---|---|---|---|
+| D-031 | "模拟器在我的电脑上，服务也在我的电脑上，本来就在一个局域网上，如果这样你还要专门桥接，未来推广怎么办？你要对着真正广泛推广的项目去做。不是玩具。……必须所有都按照上线指标来做。中间任何悄悄的降级是不对的。" | 中继已改 LAN 可路由监听（`lsof`：whalemaid-relay 监听 `*:9180`/`*:9443`）；修复 `--client` 缺失 bug（`packages/plugin/src/relay.ts:314`，此前 rathole 子进程从未启动，隧道从未建立）；BlueStacks App 直接填入 LAN 地址 `172.20.10.3:9180`（无 adb reverse、无 localhost 桥接）→ 中继 → noise 隧道 → 宿主 3181，实测官方 UI `<title>DeepSeek Harness</title>`、`session.list` 官方信封、V1 `/api/whalemaid/voice.transcribe`/`vision.describe` 全部经隧道透传成功（2026-08-17） | ✅ 对齐（上线拓扑的关键一环已按原话复核） |
+| D-032 | "受控端身份单位是加载 WhaleMaid 的准确 DSH profile/实例，不是整台电脑…同机可有多个不同工作状态的 DSH 实例。设备编号、长期/短期密码、中继凭据、隧道路由必须绑定所选插件实例，并继承该实例自己的会话、凭据、设置、工作区…" | 测试宿主 profile 的插件身份绑定到 profile 的 `ctx.baseUrl`：`.dsh-test/profiles/test/whalemaid/store.json` 设备号为 `WHALE-N2MC-43W6`（与旧的全局 `WHALE-D68Z-7HBK` 分开），长密码/中继凭据/临时密码状态全部在该 profile 自己的数据目录持久化；该 profile 的宿主实例装载官方 UI 并继承其会话（`session.list` 返回 5 项） | ◐ 部分（身份绑定与持久化已实测；同机多 profile 并发状态继承/短期密码完整链路仍待更多 profile 复核）
+
