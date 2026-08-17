@@ -207,7 +207,7 @@ public final class WhaleMaidNativePlugin: CAPPlugin, CAPBridgedPlugin {
             defer { try? handle.close() }
             try handle.seek(toOffset: UInt64(offset))
             let length = min(max(requested, 1), maxChunkBytes)
-            let data = try handle.read(upToCount: length) ?? Data()
+            let data = try handle.readData(ofLength: length)
             call.resolve([
                 "data": data.base64EncodedString(),
                 "offset": offset,
@@ -368,10 +368,12 @@ public final class WhaleMaidNativePlugin: CAPPlugin, CAPBridgedPlugin {
                 try? output.close()
             }
             var copied = 0
-            while let chunk = try input.read(upToCount: 8192), !chunk.isEmpty {
+            while true {
+                let chunk = try input.readData(ofLength: 8192)
+                guard !chunk.isEmpty else { break }
                 copied += chunk.count
                 guard copied <= maxAssetBytes else { throw NativeAssetError.invalidSize }
-                try output.write(contentsOf: chunk)
+                try output.write(chunk)
             }
             guard copied > 0 else { throw NativeAssetError.invalidSize }
             return try registerFile(url: destination, name: sourceName, mimeType: mime)
