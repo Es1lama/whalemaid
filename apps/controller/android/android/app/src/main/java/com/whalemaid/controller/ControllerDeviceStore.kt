@@ -16,6 +16,7 @@ data class SavedLongTermCredential(
 interface ControllerDeviceStore {
     fun configuredServer(): String?
     fun configureServer(server: String)
+    fun migrateServer(from: String, to: String): Int
     fun devices(): List<SavedControllerDevice>
     fun rememberLongTerm(server: String, deviceId: String, password: String)
     fun credential(deviceId: String): SavedLongTermCredential?
@@ -34,6 +35,16 @@ class InMemoryControllerDeviceStore(
 
     override fun configureServer(server: String) {
         this.server = server
+    }
+
+    override fun migrateServer(from: String, to: String): Int {
+        if (from == to) return 0
+        val matching = credentials.values.filter { it.server == from }
+        matching.forEach { credential ->
+            credentials[credential.deviceId] = credential.copy(server = to)
+        }
+        if (server == from) server = to
+        return matching.size
     }
 
     override fun devices(): List<SavedControllerDevice> = credentials.values
