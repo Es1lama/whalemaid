@@ -61,6 +61,24 @@ test('rejects a wrong HTTPS fingerprint', async () => {
   })
 })
 
+test('HTTPS refuses a first connection without a TOFU persistence sink', async () => {
+  await assert.rejects(
+    pinnedHttpsRequest('127.0.0.1:1', '/'),
+    /没有已知指纹或首次固定存储/,
+  )
+})
+
+test('WSS rejects a peer whose certificate differs from the control-plane pin', () => {
+  const raw = new X509Certificate(CERT).raw
+  let terminated = 0
+  const ws = {
+    _socket: { getPeerCertificate: () => ({ raw }) },
+    terminate: () => { terminated += 1 },
+  }
+  assert.throws(() => { assertPinnedWebSocket('relay.test', ws, '00'.repeat(32)) }, /证书指纹与控制面不一致/)
+  assert.equal(terminated, 1)
+})
+
 test('empty peer certificates fail closed for HTTPS and WSS', () => {
   const socket = { getPeerCertificate: () => ({ raw: Buffer.alloc(0) }) }
   assert.throws(() => { peerFingerprint(socket) }, /未提供可固定的完整证书/)

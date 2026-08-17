@@ -35,6 +35,10 @@ export function assertPinnedWebSocket(server, ws, knownFingerprint) {
 /** HTTPS request whose response is accepted only after a non-empty certificate pin check. */
 export function pinnedHttpsRequest(server, path, options = {}) {
   return new Promise((resolve, reject) => {
+    if (!options.knownFingerprint && typeof options.onFirstFingerprint !== 'function') {
+      reject(new Error('中继证书没有已知指纹或首次固定存储，拒绝连接（SEC-001 防中间人）'))
+      return
+    }
     const agent = freshTlsAgent()
     let verified = false
     let settled = false
