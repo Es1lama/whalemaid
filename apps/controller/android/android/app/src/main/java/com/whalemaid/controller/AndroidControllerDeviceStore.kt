@@ -63,6 +63,28 @@ class AndroidControllerDeviceStore(context: Context) : ControllerDeviceStore {
     }
 
     @Synchronized
+    override fun migrateServer(from: String, to: String): Int {
+        if (from == to) return 0
+        val current = readDevices()
+        val migrating = current.filter { it.server == from }
+        if (migrating.isEmpty() && configuredServer() != from) return 0
+        val editor = preferences.edit()
+        migrating.forEach { device ->
+            val oldKey = secretPreferenceKey(from, device.deviceId)
+            val encrypted = preferences.getString(oldKey, null)
+            if (encrypted != null) {
+                editor.putString(secretPreferenceKey(to, device.deviceId), encrypted)
+                editor.remove(oldKey)
+            }
+        }
+        val next = current.map { if (it.server == from) it.copy(server = to) else it }
+        editor.putString(DEVICES_KEY, encodeDevices(next))
+        if (preferences.getString(SERVER_KEY, null) == from) editor.putString(SERVER_KEY, to)
+        editor.apply()
+        return migrating.size
+    }
+
+    @Synchronized
     override fun remove(deviceId: String): Boolean {
         val normalized = deviceId.uppercase()
         val current = readDevices()
