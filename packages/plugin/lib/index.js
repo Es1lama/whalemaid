@@ -414,7 +414,7 @@ var RelayClient = class {
     writeFileSync2(cfgFile, cfgText, { mode: 384 });
     let backoffMs = 1e3;
     const spawnClient = () => {
-      this.child = spawn(this.cfg.ratholeBin, [cfgFile], { stdio: "ignore" });
+      this.child = spawn(this.cfg.ratholeBin, ["--client", cfgFile], { stdio: "ignore" });
       this.child.on("exit", (code) => {
         this.log(`[whalemaid] rathole \u5BA2\u6237\u7AEF\u9000\u51FA code=${code}\uFF0C${backoffMs}ms \u540E\u91CD\u8FDE\uFF08UX-012\uFF09`);
         if (!this.stopped) {
