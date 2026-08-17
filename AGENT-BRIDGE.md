@@ -25,23 +25,18 @@
 
 ---
 
-## ⚠️ 遇到的关键难题 — 你可以提前准备
+## ⚠️ ~~遇到的关键难题 — 你可以提前准备~~ ✅ 已解决
 
-### 1. rathole noise 隧道不转发数据（最高优先级）
-**症状**：rathole 客户端（PID 65560）连接控制通道成功，但数据通道/控制通道持续 "Failed to read cmd: early eof"，服务端口 5205 接受连接但不转发。**即使移除 noise 使用纯 TCP 也不转发。**
+### ~~1. rathole noise 隧道不转发数据（最高优先级）~~ ✅ 已解决
+**真相**：rathole 隧道一直工作正常。所有 "timeout 0 bytes" 均为**测试脚本中 Content-Length 与请求体不匹配**（91 vs 87 字节），导致宿主等待更多字节不响应。实际隧道：
+- 直连 rathole 服务端口 5205 → 200 OK（5856 bytes）
+- 经 TLS 隧道 9443（GRANT 一次性授权）→ 200 OK（5855 bytes）
+- 经 `172.20.10.3:9180`（LAN 地址）→ 同上
 
-**根因猜测**：rathole 0.6.0-beta.1（2026-04-16 构建，cargo 特性含 noise/snowstorm）在某次重连后出现 bug。原始服务器运行了 8 小时+正常，但 kill 后重启即无法建立转发通道。可能是：
-- 配置中 WHALE-D68Z-7HBK 有重复条目（一个 revoked 一个正常），导致 rathole server 异常
-- 服务端口 5203（旧已吊销设备）绑定失败，但 rathole server 仍尝试管理
-- rathole 本身的 noise 实现 bug
-
-**建议方向**：
-1. 清空 `.relay-e2e3/devices.json` 只保留 WHALE-N2MC-43W6，重启 relay 看是否修复
-2. 升级或重新编译 rathole 二进制
-3. 考虑备用方案：用 `socat`/`rinetd` 替换 rathole 做 TCP 隧道（抛弃 noise 层，依赖 TLS 入口的 SEC-004b）
+**证据**：`node -e "const body=JSON.stringify({rpcId:'test'}); const req='POST /...\r\nContent-Length: '+body.length+'\r\n\r\n'+body; ..."` 使用动态 Content-Length 即可正常工作。
 
 ### 2. 手机 App 断连后需手动重连
-Relay 重启后 phone session 丢失，BlueStacks 上的 App 需要重新输入连接信息。这需要手动操作或通过 adb 发送 `/_ctrl/connect` 重新授权。
+手机 app 代理（43969）已通过 adb forward 恢复。app 正常显示 WhaleMaid UI。因 relay 重启导致会话丢失，需从 app UI 重新连接至 relay。app 配置（relay URL、deviceId、credential）存储在 SharedPreferences 中，无法从 adb shell 直接读取。
 
 ### 3. stale 文档检查
 docs/ 目录下还有没有残留的旧协议/旧 API 引用？可以用 `grep -rn "api/v1\|v2\|旧网关" docs/ --include="*.md"` 检查。

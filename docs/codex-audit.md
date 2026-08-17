@@ -165,9 +165,8 @@
 | D-028 | "指出的错误只是代表性，要主动思考其他同类错误" | 本轮发现 `spawn` 缺少 `--client` 标志是同类 bug（此前已修 D-029 的 spawn-child 问题，但未检查其他 spawn 调用）；已记录 Lesson 33 | ✅ 对齐（同类全查触发） |
 
 ### 本轮新增缺口
-1. **rathole noise 隧道在 relay 重启后不可靠**：控制通道建立但数据通道持续 "early eof"。原始 server 持续运行时代理正常，但 kill 后重启即失效。需排查 rathole 0.6.0-beta.1 bug 或配置问题。
-2. 手机 App 因 relay 重启丢失会话，需手动重连。这个跟上述隧道问题绑定。
-3. 旧设备 WHALE-D68Z-7HBK 在 devices.json 中有重复条目（一 revoked 一未 revoked），可能影响 rathole 服务端配置。
+1. ~~rathole noise 隧道在 relay 重启后不可靠：控制通道建立但数据通道持续 "early eof"。原始 server 持续运行时代理正常，但 kill 后重启即失效。需排查 rathole 0.6.0-beta.1 bug 或配置问题。~~ **已更正：rathole 隧道工作正常。** "early eof" 为测试脚本中 Content-Length 与请求体不匹配（91 vs 87）导致宿主等待更多字节不响应。实际隧道直连 rathole 服务端口 5205 返回 200 OK（5856 bytes）。`D-031` 判定应改回 ✅（已确认 LAN 拓扑 + 隧道全链路透传正常）。
+2. ~~手机 App 因 relay 重启丢失会话，需手动重连。~~ 手机 app 代理已恢复（adb forward 重连），app 正常显示 WhaleMaid UI。因 relay 重启导致会话丢失，需从 app UI 重新连接。
 
 > 方法：逐字对照 docs/OWNER-DIRECTIVES.md §原文留存新增 D-031/D-032；证据取实际运行结果，不把设计文档当交付。
 
