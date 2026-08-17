@@ -153,6 +153,22 @@
 
 ## 第五轮：用户原话对齐审计（2026-08-17，主代理执行）
 
+## 第六轮：用户原话对齐审计（2026-08-17，主代理执行，Round 4）
+
+> 本轮重点：OWNER-DIRECTIVES 批量状态更新、rathole noise 隧道故障发现、Android CI 修复。
+
+| 指令 | 用户原话（摘录） | 实际结果（证据） | 判定 |
+|---|---|---|---|
+| D-017 | "验收=只剩注册邮箱/短信厂商、填语音/视觉 key、备服务器即可上架" | LAN 拓扑复核已通过，CI 全平台绿；OWNER-DIRECTIVES D-017 状态更新为需实体手机/外网抽检后才能声明只剩前三项 | ✅ 对齐 |
+| D-031 | "必须所有都按照上线指标来做。中间任何悄悄的降级是不对的。" | 发现 rathole noise 隧道在 relay 重启后不转发数据（"Failed to read cmd: early eof"），原始 server 运行 8h+ 正常但 kill 后重启即失效。此前的 D-031 通过是基于原始 server 的持续连接，非重启后验证。问题已记录至 AGENT-BRIDGE.md 供协作排查 | ◐ 部分（LAN 拓扑验证通过，但 rathole 隧道在重启后不可靠，需修复后才能视为 D-031 全通） |
+| D-032 | "受控端身份单位是加载 WhaleMaid 的准确 DSH profile/实例……同机可有多个不同工作状态的 DSH 实例" | 身份绑定已验证；临时密码生成/原子消费 API 级验证通过；OWNER-DIRECTIVES 更新 | ✅ 对齐 |
+| D-028 | "指出的错误只是代表性，要主动思考其他同类错误" | 本轮发现 `spawn` 缺少 `--client` 标志是同类 bug（此前已修 D-029 的 spawn-child 问题，但未检查其他 spawn 调用）；已记录 Lesson 33 | ✅ 对齐（同类全查触发） |
+
+### 本轮新增缺口
+1. **rathole noise 隧道在 relay 重启后不可靠**：控制通道建立但数据通道持续 "early eof"。原始 server 持续运行时代理正常，但 kill 后重启即失效。需排查 rathole 0.6.0-beta.1 bug 或配置问题。
+2. 手机 App 因 relay 重启丢失会话，需手动重连。这个跟上述隧道问题绑定。
+3. 旧设备 WHALE-D68Z-7HBK 在 devices.json 中有重复条目（一 revoked 一未 revoked），可能影响 rathole 服务端配置。
+
 > 方法：逐字对照 docs/OWNER-DIRECTIVES.md §原文留存新增 D-031/D-032；证据取实际运行结果，不把设计文档当交付。
 
 ### 逐条对照（原文摘录 | 实际结果证据 | 判定）
