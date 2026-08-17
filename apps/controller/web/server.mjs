@@ -2,13 +2,12 @@
 // 模型：浏览器无法开裸 TLS 隧道 → 每个请求经 WSS 隧道入口（SEC-004b web 变体）逐连接取 grant 转发。
 // 设备管理首屏（ToDesk 式：服务端地址+设备编号+密码，无 IP/端口/协议字样）+ 连接后反向代理宿主官方 UI/API/WS。
 import { createServer } from 'node:http'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import https from 'node:https'
 import WebSocket, { WebSocketServer } from 'ws'
 import { GrantSession, RelayConnectError } from './auth-session.mjs'
+import { assertPinnedWebSocket, freshTlsAgent, pinnedHttpsRequest } from './tls-pin.mjs'
 
 const PORT = Number(process.env.CONTROLLER_PORT ?? 3210)
 const HOST_AUTHORITY = process.env.CONTROLLER_HOST_AUTHORITY ?? '127.0.0.1:3181' // 受控端宿主 web 权威（过官方信任栅栏用）
@@ -29,43 +28,20 @@ const serverFingerprints = new Map(Object.entries(existsSync(FP_FILE) ? JSON.par
 function persistFingerprints() {
   writeFileSync(FP_FILE, JSON.stringify(Object.fromEntries(serverFingerprints), null, 2), { mode: 0o600 })
 }
-/** WSS 证书校验（审计三轮#1）：握手完成后必须与控制面指纹一致，否则断连——WSS 与 HTTPS 同身份链 */
+/** WSS 与 HTTPS 控制面固定同一个非空证书身份。 */
 function assertWssFingerprint(server, ws) {
-  const cert = ws._socket?.getPeerCertificate?.(true)
-  const fp = cert?.raw ? createHash('sha256').update(cert.raw).digest('hex') : ''
-  const known = serverFingerprints.get(server)
-  if (!known) { ws.terminate(); throw new Error('该服务端尚未完成首次指纹固定（先经控制面 HTTPS 建立信任）') }
-  if (fp !== known) { ws.terminate(); throw new Error(`WSS 证书指纹与控制面不一致（防中间人）：${fp.slice(0, 12)}… ≠ ${known.slice(0, 12)}…`) }
+  assertPinnedWebSocket(server, ws, serverFingerprints.get(server))
 }
 
-/** 调中继控制面（TLS + 证书指纹固定；任何异常都走 reject，绝不抛进程级错误） */
+/** 调中继控制面；每次连接均取得完整证书并在接收响应前完成固定校验。 */
 function relayRequest(server, path, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const r = https.request(`https://${server}${path}`, { method: opts.method ?? 'GET', headers: opts.headers ?? {}, rejectUnauthorized: false }, (res) => {
-      let d = ''
-      res.on('data', (c) => d += c)
-      res.on('end', () => resolve({ status: res.statusCode, body: d }))
-    })
-    r.on('socket', (socket) => {
-      socket.on('error', (e) => { try { r.destroy() } catch {} reject(e) })
-      socket.on('secureConnect', () => {
-        try {
-          const cert = socket.getPeerCertificate(true)
-          const fp = createHash('sha256').update(cert.raw ?? Buffer.alloc(0)).digest('hex')
-          const known = serverFingerprints.get(server)
-          if (known && fp !== known) {
-            r.destroy()
-            reject(new Error(`中继证书指纹变化（防中间人）：预期 ${known.slice(0, 12)}… 实际 ${fp.slice(0, 12)}…`))
-          } else if (!known) {
-            serverFingerprints.set(server, fp) // 首次 TOFU（落盘，重启后继续生效）
-            persistFingerprints()
-          }
-        } catch (e) { r.destroy(); reject(e) }
-      })
-    })
-    r.on('error', reject)
-    if (opts.body) r.write(opts.body)
-    r.end()
+  return pinnedHttpsRequest(server, path, {
+    ...opts,
+    knownFingerprint: serverFingerprints.get(server),
+    onFirstFingerprint: (fingerprint) => {
+      serverFingerprints.set(server, fingerprint)
+      persistFingerprints()
+    },
   })
 }
 
@@ -86,7 +62,7 @@ function tunnelExchange(httpText, binaryFrames = []) {
   return new Promise((resolve, reject) => {
     requestGrant().then((connection) => {
       const grant = connection.grant
-      const ws = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false })
+      const ws = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false, agent: freshTlsAgent() })
       const out = []
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('隧道超时')) }, 15_000)
       ws.on('open', () => {
@@ -266,7 +242,7 @@ server.on('upgrade', (req, socket, head) => {
   if (!url.pathname.startsWith('/api/events') || !session.connected) { socket.destroy(); return }
   const tunnel = async () => {
     const grant = (await requestGrant()).grant
-    const up = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false })
+    const up = new WebSocket(`wss://${session.server}/_whalemaid/tunnel-ws`, { rejectUnauthorized: false, agent: freshTlsAgent() })
     up.on('open', () => {
       try { assertWssFingerprint(session.server, up) } catch (e) { up.terminate(); socket.destroy(); return }
       up.send(`GRANT ${grant} ${session.deviceId}`)
