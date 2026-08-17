@@ -1,0 +1,630 @@
+From 013bdb0097274eccd0d6345b84767c761b461e84 Mon Sep 17 00:00:00 2001
+From: Esilama_mac <2414245047@qq.com>
+Date: Mon, 17 Aug 2026 23:06:48 +0800
+Subject: [PATCH] fix(web): surface workspace selection failures
+
+---
+ ...ce-selection-errors-reach-picker.i18n.yaml |  6 ++
+ ...workspace-selection-errors-reach-picker.md | 31 ++++++++
+ ...kspace-selection-errors-reach-picker.zh.md | 31 ++++++++
+ packages/client/runtime/README.i18n.yaml      |  4 +-
+ packages/client/runtime/README.md             |  2 +-
+ packages/client/runtime/README.zh.md          |  2 +-
+ .../runtime/src/client/workspaces/service.ts  | 13 ++--
+ .../tests/workspaces-service.client.spec.ts   | 12 ++++
+ .../ui-agent-preset/src/client/index.ts       |  4 +-
+ .../tests/apply.client.spec.ts                |  2 +-
+ .../src/client/contract/slots.ts              |  3 +-
+ .../src/client/skeleton/ConversationRoot.tsx  |  9 ++-
+ .../tests/skeleton.client.spec.tsx            |  6 +-
+ .../client/ui-sidebar/src/client/index.ts     |  6 +-
+ .../ui-sidebar/tests/apply.client.spec.tsx    |  2 +-
+ packages/client/ui-workspace/README.i18n.yaml |  4 +-
+ packages/client/ui-workspace/README.md        |  2 +-
+ packages/client/ui-workspace/README.zh.md     |  2 +-
+ .../src/client/WorkspaceBrowser.tsx           |  8 ++-
+ .../src/client/WorkspacePicker.tsx            | 71 +++++++++++++------
+ .../ui-workspace/src/client/contract/slots.ts |  2 +-
+ .../client/ui-workspace/src/client/index.ts   |  2 +-
+ .../client/ui-workspace/src/client/locales.ts |  4 ++
+ .../ui-workspace/tests/apply.client.spec.ts   |  2 +-
+ .../tests/workspace-picker.client.spec.tsx    | 20 +++++-
+ 25 files changed, 197 insertions(+), 53 deletions(-)
+ create mode 100644 .agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.i18n.yaml
+ create mode 100644 .agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.md
+ create mode 100644 .agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.zh.md
+
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.i18n.yaml b/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.i18n.yaml
+new file mode 100644
+index 0000000..e5f89b7
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.i18n.yaml
+@@ -0,0 +1,6 @@
++# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
++# side as of the last confirmed-consistent state. Both languages carry equal authority;
++# after editing either side, bring the other along and re-record with:
++#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.md
++2026-08-17-workspace-selection-errors-reach-picker.md: 9d5379d8ca3181acafb0006e7d09bfbc9aa82b05
++2026-08-17-workspace-selection-errors-reach-picker.zh.md: 444449bab0bdc122375b79c4b682f51fc0d22af1
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.md b/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.md
+new file mode 100644
+index 0000000..9d5379d
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.md
+@@ -0,0 +1,31 @@
++# Agent Note: Workspace selection failures reach the picker
++
++Status: implemented
++
++English | [中文](2026-08-17-workspace-selection-errors-reach-picker.zh.md)
++
++## Problem
++
++The Workspace picker closed as soon as a user selected an existing Workspace. `ConversationRoot` then called `selectWorkspace()` and caught a rejection only to remove the optimistic label. A protected directory, read-only profile, missing ledger, or other `session.create` / Workspace attachment failure therefore left the user on the unchanged screen with no explanation or retry action, even though the Host returned an actionable structured error. The sidebar add flow had the same terminal operation behind `WorkspaceRuntime.startSession()`, which logged failures to the console and resolved no outcome to its UI owner.
++
++## Decision
++
++Workspace selection is an asynchronous owner operation. `EmptyWorkspaceOwnerProps.onPick` returns `Promise<void>`, and `ConversationRoot` rolls back its optimistic label then rethrows the original rejection. `WorkspaceRuntime.startSession()` also returns a promise that settles after the target blank Session is selected and rejects unchanged when creation or attachment fails.
++
++`WorkspacePickFlow` owns presentation for both picker surfaces. Directory interaction and path-adoption failures continue to use the folder dialog and reopen the directory flow. A failure after a Workspace id exists uses a distinct **Couldn’t enter workspace** dialog, preserves the Host error message, and retries the same Workspace id without reopening directory selection. Workspace actions remain disabled while either directory adoption or Workspace selection is in flight.
++
++## Alternatives considered
++
++**Keep failures in runtime console diagnostics.** Rejected because remote and packaged clients do not expose that console as a user recovery surface, and the UI that initiated the operation already owns a retryable modal.
++
++**Convert operating-system failures into a small client-side error taxonomy.** Rejected because the Host owns filesystem policy and already reports the useful platform detail. Mapping only known POSIX or Windows codes would discard unanticipated provider and persistence failures.
++
++**Retry automatically.** Rejected because permission denial, protected system directories, and read-only storage are stable conditions. Automatic retries can create more partial blank Sessions and cannot tell the user what must change.
++
++## Consequences
++
++Selecting a Workspace no longer completes at the menu click; it completes when the corresponding blank Session is ready. Existing Workspace selection and post-adoption attachment share one retry path, while directory selection retains its separate retry semantics. The picker stores one operation-local retry closure while its modal is open; closing the modal drops it. No wire method, Host behavior, durable format, or filesystem policy changes.
++
++## Testing
++
++Workspace picker tests cover an `EPERM`-style selection rejection, visible Host text, retrying the same id, and successful modal dismissal. Conversation skeleton tests require owner rejection to remain observable while the optimistic label rolls back. Runtime and registration tests cover the promise-returning `startSession` call path. The focused GUI tests and affected-package typechecks pass.
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.zh.md b/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.zh.md
+new file mode 100644
+index 0000000..444449b
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-17-workspace-selection-errors-reach-picker.zh.md
+@@ -0,0 +1,31 @@
++# Agent Note: Workspace 选择失败会到达选择器
++
++Status: implemented
++
++[English](2026-08-17-workspace-selection-errors-reach-picker.md) | 中文
++
++## Problem
++
++用户选择既有 Workspace 后，Workspace 选择器会立即关闭。随后 `ConversationRoot` 调用 `selectWorkspace()`，拒绝发生时只移除乐观标签。受保护目录、只读 profile、ledger 缺失或其他 `session.create`／Workspace 挂载失败，因此只会让用户停在未变化的页面上，没有说明和重试操作，尽管 Host 已返回可操作的结构化错误。侧边栏添加流程的终端操作同样经过 `WorkspaceRuntime.startSession()`；后者只把失败写入控制台，不向 UI owner 返回结果。
++
++## Decision
++
++Workspace 选择是一项异步 owner 操作。`EmptyWorkspaceOwnerProps.onPick` 返回 `Promise<void>`；`ConversationRoot` 回滚乐观标签后重新抛出原始拒绝。`WorkspaceRuntime.startSession()` 也返回 Promise，只在目标空白 Session 已选中后完成，并在创建或挂载失败时原样拒绝。
++
++`WorkspacePickFlow` 负责两个选择器表层的错误呈现。目录交互与路径接纳失败继续使用文件夹对话框，并重新打开目录流程。已有 Workspace id 后发生的失败使用独立的 **无法进入工作区** 对话框，保留 Host 错误消息，并直接重试同一个 Workspace id，而不重新打开目录选择。在目录接纳或 Workspace 选择进行期间，Workspace 操作保持禁用。
++
++## Alternatives considered
++
++**继续只在 runtime 控制台记录失败。** 否决，因为远程和已打包客户端不会把该控制台作为用户恢复界面，而发起操作的 UI 已拥有可重试模态框。
++
++**把操作系统失败转换成一小组客户端错误类别。** 否决，因为文件系统策略由 Host 持有，Host 已报告有用的平台细节。只映射已知 POSIX 或 Windows 错误码会丢弃未预见的 provider 与持久化失败。
++
++**自动重试。** 否决，因为权限拒绝、系统保护目录与只读存储属于稳定条件。自动重试可能创建更多部分成功的空白 Session，也无法告诉用户必须改变什么。
++
++## Consequences
++
++选择 Workspace 不再在菜单点击时完成，而是在对应空白 Session 就绪时完成。既有 Workspace 选择与接纳目录后的挂载共用一条重试路径，目录选择仍保留独立的重试语义。选择器只在模态框打开期间保存一项操作局部重试闭包；关闭模态框就会丢弃它。wire 方法、Host 行为、持久格式与文件系统策略均不改变。
++
++## Testing
++
++Workspace picker 测试覆盖类似 `EPERM` 的选择拒绝、可见的 Host 文本、重试同一 id，以及成功关闭模态框。Conversation skeleton 测试要求 owner 拒绝在乐观标签回滚后仍可观察。Runtime 与注册测试覆盖返回 Promise 的 `startSession` 调用路径。聚焦 GUI 测试与受影响 package 类型检查均通过。
+diff --git a/packages/client/runtime/README.i18n.yaml b/packages/client/runtime/README.i18n.yaml
+index cd46900..2b2e696 100644
+--- a/packages/client/runtime/README.i18n.yaml
++++ b/packages/client/runtime/README.i18n.yaml
+@@ -2,5 +2,5 @@
+ # side as of the last confirmed-consistent state. Both languages carry equal authority;
+ # after editing either side, bring the other along and re-record with:
+ #   pnpm run verify-translation-pairing --write packages/client/runtime/README.md
+-README.md: 1fb91bc8ca1bf9beae0ea12632acd9572db58670
+-README.zh.md: 294a77d7081f5b475aca8b50f6c6d8322370375d
++README.md: 1cc73690716f4b0e1bb4dd569a2bfdc37a3bc85a
++README.zh.md: 86c5037991aa256393dcb1766decb62fff86ae54
+diff --git a/packages/client/runtime/README.md b/packages/client/runtime/README.md
+index 1fb91bc..1cc7369 100644
+--- a/packages/client/runtime/README.md
++++ b/packages/client/runtime/README.md
+@@ -34,7 +34,7 @@ SlotRegistry gives the renderer separate bare observables for `useSessions` and
+ 
+ ## New Session and the blank mirror
+ 
+-`WorkspaceRuntime.connectWorkspace(workspaceId)` resolves the session a New Session flow lands in: it reuses the workspace's existing blank session from the list mirror (`blank && cwd == workspace.path && sessionIds.includes(id)` — the host's own membership rule, never cwd alone, so a cwd-matching unaccounted blank session is never hijacked) or calls `session.create({workspaceId})`, returning the session id for the caller to open. The shared `startSession` action targets an explicit Workspace first, then the current Session's Workspace, then the derived recent Workspace; with no Workspace it clears into the blank New Session page. `SessionSummary.blank` mirrors the host's derived empty-log bit and only ever lowers on the client: seeded by `session.list` / the `host/session-added` frame, flipped false by the first ACCEPTED local `prompt()` (on the RPC success response — acceptance proves the user message is in the host log; a rejected first prompt keeps the session blank and reusable) and by any `running: true` status frame, re-aligned by every list re-pull. List surfaces hide blank rows; the store carries every row. `SessionRuntime.create` accepts an optional caller-preallocated SessionId and throws `SessionCreateError` (carrying `requestedSessionId`) on failure.
++`WorkspaceRuntime.connectWorkspace(workspaceId)` resolves the session a New Session flow lands in: it reuses the workspace's existing blank session from the list mirror (`blank && cwd == workspace.path && sessionIds.includes(id)` — the host's own membership rule, never cwd alone, so a cwd-matching unaccounted blank session is never hijacked) or calls `session.create({workspaceId})`, returning the session id for the caller to open. The shared `startSession` action targets an explicit Workspace first, then the current Session's Workspace, then the derived recent Workspace; with no Workspace it clears into the blank New Session page. Its promise settles only after the blank Session is selected and rejects with the original Session creation or Workspace attachment failure so the calling UI owns presentation and retry. `SessionSummary.blank` mirrors the host's derived empty-log bit and only ever lowers on the client: seeded by `session.list` / the `host/session-added` frame, flipped false by the first ACCEPTED local `prompt()` (on the RPC success response — acceptance proves the user message is in the host log; a rejected first prompt keeps the session blank and reusable) and by any `running: true` status frame, re-aligned by every list re-pull. List surfaces hide blank rows; the store carries every row. `SessionRuntime.create` accepts an optional caller-preallocated SessionId and throws `SessionCreateError` (carrying `requestedSessionId`) on failure.
+ 
+ `Session.composerPhase` treats any visible non-command Chat Node as conversation content, so a client plugin can project durable human input without opening a turn while a window containing only generic command rows retains the Host blank posture. List hiding and blank-session reuse still follow the Host blank bit. A history window that lacks the plugin-owned input Node returns to that blank posture until an older page restores it.
+ 
+diff --git a/packages/client/runtime/README.zh.md b/packages/client/runtime/README.zh.md
+index 294a77d..86c5037 100644
+--- a/packages/client/runtime/README.zh.md
++++ b/packages/client/runtime/README.zh.md
+@@ -34,7 +34,7 @@ SlotRegistry 分别为 renderer 提供 `useSessions` 与 `useWorkspaces` 的裸
+ 
+ ## New Session 与 blank 镜像
+ 
+-`WorkspaceRuntime.connectWorkspace(workspaceId)` 解析 New Session 流程最终落入的会话：先在列表镜像中复用该 workspace 的既有空会话（`blank && cwd == workspace.path && sessionIds.includes(id)`——host 自己的成员规则，绝不只按 cwd，避免劫持 cwd 匹配但未入账的空白会话），未命中则调用 `session.create({workspaceId})`，返回会话 id 由调用方 open。共享的 `startSession` 操作优先使用明确指定的 Workspace，其次使用当前 Session 所属 Workspace，再其次使用派生的最近活跃 Workspace；一个 Workspace 都没有时则清空选择，进入空白 New Session 页面。`SessionSummary.blank` 镜像主机派生的空日志位，在客户端只降不升：由 `session.list`／`host/session-added` 帧播种，本地首次获 Host 接受的 `prompt()`（RPC 成功响应时——受理即证明用户消息已入主机日志；首讯被拒则会话保持 blank、保持可复用）与任何 `running: true` 状态帧翻为 false，每次列表重拉重新对齐。列表界面隐藏 blank 行；store 保留全部行。`SessionRuntime.create` 接受可选的、由调用方预先分配的 SessionId，失败时抛出 `SessionCreateError`（携带 `requestedSessionId`）。
++`WorkspaceRuntime.connectWorkspace(workspaceId)` 解析 New Session 流程最终落入的会话：先在列表镜像中复用该 workspace 的既有空会话（`blank && cwd == workspace.path && sessionIds.includes(id)`——host 自己的成员规则，绝不只按 cwd，避免劫持 cwd 匹配但未入账的空白会话），未命中则调用 `session.create({workspaceId})`，返回会话 id 由调用方 open。共享的 `startSession` 操作优先使用明确指定的 Workspace，其次使用当前 Session 所属 Workspace，再其次使用派生的最近活跃 Workspace；一个 Workspace 都没有时则清空选择，进入空白 New Session 页面。其 Promise 只在空白 Session 已被选中后完成，并以原始 Session 创建或 Workspace 挂载错误拒绝，让调用它的 UI 负责呈现与重试。`SessionSummary.blank` 镜像主机派生的空日志位，在客户端只降不升：由 `session.list`／`host/session-added` 帧播种，本地首次获 Host 接受的 `prompt()`（RPC 成功响应时——受理即证明用户消息已入主机日志；首讯被拒则会话保持 blank、保持可复用）与任何 `running: true` 状态帧翻为 false，每次列表重拉重新对齐。列表界面隐藏 blank 行；store 保留全部行。`SessionRuntime.create` 接受可选的、由调用方预先分配的 SessionId，失败时抛出 `SessionCreateError`（携带 `requestedSessionId`）。
+ 
+ `Session.composerPhase` 把任何可见的非命令 Chat Node 视为对话内容，因此客户端插件可以在不打开轮次的情况下投影持久用户输入，而仅包含通用命令行的窗口仍保持 Host blank 状态。列表隐藏和空白会话复用仍遵循 Host blank 位。缺少插件输入 Node 的历史窗口会恢复该空白状态，直到加载更早页面后该 Node 恢复。
+ 
+diff --git a/packages/client/runtime/src/client/workspaces/service.ts b/packages/client/runtime/src/client/workspaces/service.ts
+index c23e3b3..5e9435b 100644
+--- a/packages/client/runtime/src/client/workspaces/service.ts
++++ b/packages/client/runtime/src/client/workspaces/service.ts
+@@ -170,11 +170,12 @@ export class WorkspaceRuntime implements IWorkspaces {
+    * then the current Session's Workspace, then the recent-Workspace
+    * projection — connect its blank session and navigate there; with no
+    * Workspace at all, clear the selection into the New Session view state.
+-   * Connect failures are non-fatal (console diagnostics; the current view
+-   * stays usable).
++   * The returned promise settles after navigation so each UI surface can render
++   * a connection or attachment failure without the runtime swallowing it.
+    * @param workspaceId - explicit target Workspace for scoped actions.
++   * @returns Completion after the target blank Session is ready and selected.
+    */
+-  startSession(workspaceId?: WorkspaceId): void {
++  async startSession(workspaceId?: WorkspaceId): Promise<void> {
+     const workspace = this.list.getSnapshot()
+     const current = this.sessions.list.getSnapshot().current
+     const currentWorkspaceId = current === undefined
+@@ -185,10 +186,8 @@ export class WorkspaceRuntime implements IWorkspaces {
+       this.sessions.clear()
+       return
+     }
+-    void this.connectWorkspace(target).then(
+-      (sessionId) => { this.sessions.open(sessionId) },
+-      (reason: unknown) => { console.warn('new session failed:', reason) },
+-    )
++    const sessionId = await this.connectWorkspace(target)
++    this.sessions.open(sessionId)
+   }
+ 
+   /**
+diff --git a/packages/client/runtime/tests/workspaces-service.client.spec.ts b/packages/client/runtime/tests/workspaces-service.client.spec.ts
+index cfdfa98..1e464db 100644
+--- a/packages/client/runtime/tests/workspaces-service.client.spec.ts
++++ b/packages/client/runtime/tests/workspaces-service.client.spec.ts
+@@ -442,6 +442,18 @@ describe('WorkspaceRuntime', () => {
+     expect(clear).toHaveBeenCalledOnce()
+   })
+ 
++  it('returns the original Workspace connection failure to the UI owner', async () => {
++    const ctx = new Context()
++    const api = new FakeApiClient()
++    const sessions = new SessionRuntime(ctx, api, fakeRemote())
++    const workspaces = new WorkspaceRuntime(ctx, api, sessions)
++    const failure = new Error('EPERM: protected system directory')
++    vi.spyOn(workspaces, 'connectWorkspace').mockRejectedValue(failure)
++
++    await expect(workspaces.startSession(wid('protected'))).rejects.toBe(failure)
++    expect(sessions.list.getSnapshot().current).toBeUndefined()
++  })
++
+   it('archives a session, projects the set from the response, list, and frame, and clears only the current one', async () => {
+     const ctx = new Context()
+     const api = new FakeApiClient()
+diff --git a/packages/client/ui-agent-preset/src/client/index.ts b/packages/client/ui-agent-preset/src/client/index.ts
+index f327479..7417741 100644
+--- a/packages/client/ui-agent-preset/src/client/index.ts
++++ b/packages/client/ui-agent-preset/src/client/index.ts
+@@ -160,7 +160,9 @@ export function apply(ctx: ClientContext): void {
+         // The introduce cue makes the chip announce the pick the user never
+         // made on this screen — the stage happened back in settings.
+         seat.stage('cordis', true)
+-        scope.workspaces.startSession()
++        void scope.workspaces.startSession().catch((reason: unknown) => {
++          console.warn('new session failed:', reason)
++        })
+       }
+       const chip = scope.slots.register({
+         name: 'conversation.hero.agentPreset',
+diff --git a/packages/client/ui-agent-preset/tests/apply.client.spec.ts b/packages/client/ui-agent-preset/tests/apply.client.spec.ts
+index 7ff4741..e0114a2 100644
+--- a/packages/client/ui-agent-preset/tests/apply.client.spec.ts
++++ b/packages/client/ui-agent-preset/tests/apply.client.spec.ts
+@@ -147,7 +147,7 @@ function workspacesDouble() {
+   const starts: unknown[] = []
+   return {
+     starts,
+-    startSession: (workspaceId?: unknown) => { starts.push(workspaceId ?? null) },
++    startSession: async (workspaceId?: unknown) => { starts.push(workspaceId ?? null) },
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/src/client/contract/slots.ts b/packages/client/ui-conversation/src/client/contract/slots.ts
+index 2125914..95a0cc5 100644
+--- a/packages/client/ui-conversation/src/client/contract/slots.ts
++++ b/packages/client/ui-conversation/src/client/contract/slots.ts
+@@ -731,6 +731,7 @@ export interface EmptyWorkspaceOwnerProps {
+   anchorRef?: RefObject<HTMLElement>
+   /** Currently active workspace (renders a trailing check in the picker list). */
+   selectedId?: WorkspaceId | undefined
+-  onPick: (workspaceId: WorkspaceId) => void
++  /** Select the workspace and settle only after its Session is ready; rejection is rendered by the picker. */
++  onPick: (workspaceId: WorkspaceId) => Promise<void>
+   onClose: () => void
+ }
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
+index ef1221c..b543195 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
+@@ -110,12 +110,15 @@ export function ConversationRoot({
+         open: pickerOpen,
+         anchorRef: pickerAnchor,
+         selectedId: pendingWorkspaceId ?? sessionWorkspace?.workspaceId,
+-        onPick: (workspaceId) => {
++        onPick: async (workspaceId) => {
+           setPickerOpen(false)
+           setPendingWorkspaceId(workspaceId)
+-          void selectWorkspace(workspaceId).catch(() => {
++          try {
++            await selectWorkspace(workspaceId)
++          } catch (error) {
+             setPendingWorkspaceId(current => current === workspaceId ? undefined : current)
+-          })
++            throw error
++          }
+         },
+         onClose: () => { setPickerOpen(false) },
+       })}
+diff --git a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
+index acf618f..cd4670c 100644
+--- a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
+@@ -471,8 +471,10 @@ describe('ConversationRoot resident composer', () => {
+       selectWorkspace,
+     )
+     fireEvent.click(b.view.getByRole('button', { name: '选择工作区' }))
+-    const owner = b.pickerOwner() as { onPick(id: WorkspaceId): void }
+-    await act(async () => { owner.onPick(wid('second')); await Promise.resolve() })
++    const owner = b.pickerOwner() as { onPick(id: WorkspaceId): Promise<void> }
++    await act(async () => {
++      await expect(owner.onPick(wid('second'))).rejects.toThrow('connect failed')
++    })
+     expect(selectWorkspace).toHaveBeenCalledWith(wid('second'))
+     expect(b.view.queryByText('Selected Folder')).toBeNull()
+     expect(b.view.getByText('one')).toBeTruthy()
+diff --git a/packages/client/ui-sidebar/src/client/index.ts b/packages/client/ui-sidebar/src/client/index.ts
+index 0bd2c98..35ab31e 100644
+--- a/packages/client/ui-sidebar/src/client/index.ts
++++ b/packages/client/ui-sidebar/src/client/index.ts
+@@ -34,7 +34,11 @@ export function apply(ctx: ClientContext): void {
+   const injectProps = (): SidebarRootInjected => ({
+     // The shell's New Session button rides the runtime's shared action
+     // (current Session Workspace, then recent Workspace).
+-    startSession: (workspaceId) => { ctx.workspaces.startSession(workspaceId) },
++    startSession: (workspaceId) => {
++      void ctx.workspaces.startSession(workspaceId).catch((reason: unknown) => {
++        console.warn('new session failed:', reason)
++      })
++    },
+     toggleSidebar: () => { ctx.layout.toggleSidebar() },
+   })
+   ctx.effect(
+diff --git a/packages/client/ui-sidebar/tests/apply.client.spec.tsx b/packages/client/ui-sidebar/tests/apply.client.spec.tsx
+index dc4fd3e..67ec5fe 100644
+--- a/packages/client/ui-sidebar/tests/apply.client.spec.tsx
++++ b/packages/client/ui-sidebar/tests/apply.client.spec.tsx
+@@ -10,7 +10,7 @@ async function bench(declare = true) {
+   const ctx = new Context()
+   await ctx.plugin(SlotRegistry).await()
+   const layout = { toggleSidebar: vi.fn() }
+-  const workspaces = { startSession: vi.fn() }
++  const workspaces = { startSession: vi.fn(async () => undefined) }
+   const sessions = { open: vi.fn(), clear: vi.fn() }
+   ctx.provide('layout', layout)
+   ctx.provide('sessions', sessions as never)
+diff --git a/packages/client/ui-workspace/README.i18n.yaml b/packages/client/ui-workspace/README.i18n.yaml
+index 6d5eff0..bddb608 100644
+--- a/packages/client/ui-workspace/README.i18n.yaml
++++ b/packages/client/ui-workspace/README.i18n.yaml
+@@ -2,5 +2,5 @@
+ # side as of the last confirmed-consistent state. Both languages carry equal authority;
+ # after editing either side, bring the other along and re-record with:
+ #   pnpm run verify-translation-pairing --write packages/client/ui-workspace/README.md
+-README.md: 8878aa49dcccd60ddcde5f0a9563bbfbd969c9c0
+-README.zh.md: c83f1c53d5471dd8d52b933163a573eb98a70c2e
++README.md: bf7f38956484e3ad93784563ab5424d10304f30f
++README.zh.md: 7a51890526a68361769f9a1c5373dd507cad7545
+diff --git a/packages/client/ui-workspace/README.md b/packages/client/ui-workspace/README.md
+index 8878aa4..bf7f389 100644
+--- a/packages/client/ui-workspace/README.md
++++ b/packages/client/ui-workspace/README.md
+@@ -8,7 +8,7 @@ The browser renders grouped or flat Session rows from the global runtime hooks a
+ 
+ Collapsed search is one header action beside the view and add actions. In the rail, add and search render as 36px controls on the shell's shared horizontal entry path. Activating search expands the field across the header; an outside click collapses only a query that is empty after trimming, while the clear control always resets and collapses it. A non-blank search query replaces either browsing mode with one flat result list: case-insensitive title and Workspace substring matches appear immediately, while a 250 ms debounced Host request adds ranked current-conversation content matches and snippets. The English search input and its defensive request path remove NUL, cap the query at the wire schema's 500 UTF-16 code units without splitting a surrogate pair, and preserve the existing debounce and cancellation behavior. Each new query aborts the preceding request; a failed content search leaves metadata matches visible with a warning. The list is capped at 20, asks the user to narrow broader queries, and opens the selected Session without clearing the query or jumping to a specific event.
+ 
+-The picker lists real Host Workspace entities through the global `useWorkspaces` hook. Selecting a Workspace invokes the slot owner's `onPick` callback to retarget the frontend Session object. Distinct canonical paths remain separate id-keyed Workspaces when their basenames and display titles match; the sidebar hover detail exposes the full path. Each registration declares a **directory-flow child hole** (`single` kind: `conversation.hero.workspace.directoryFlow` / `sidebar.workspaces.directoryFlow`) that the composed picker package's client half fills with its picking interaction — the [`-native`](../../host/directory-picker-native/README.md) backend's renderless OS-chooser driver today, an in-app browsing dialog under a `-browse` composition. The flat **Add workspace...** action renders only while the surface's hole is occupied (occupancy read per menu render; an empty hole means the composition has no picking affordance — the seam's documented no-flow default, under which the sidebar header drops its add button rather than offering a dead one). This package owns the trigger and the adoption: the occupant reports one picked path per open through the hole's owner conversation (`open`/`busy`/`onPicked`/`onCancel`/`onError`), and the owner adopts it through the object layer, selecting the committed Workspace only after its list projection has refreshed; cancellation is silent, and errors land in the retryable folder dialog whose **Choose again** reopens the flow. Adding has exactly one route: the occupant's own create-folder affordance already covers a brand-new directory, so no separate create-by-name dialog exists. A menu only appears where there is something to choose between — with no Workspace listed, the anchor gesture raises the flow directly instead of a one-row popover, and it waits for the list baseline before treating an empty list as final. The runtime Session and Workspace services own materialization. The Workspace row's Delete action opens a confirmation that states the retention boundary, blocks duplicate submission, and keeps failures open; success removes the group while its Sessions remain under Ungrouped. The Session row's Rename action opens the same browser-owned dialog pattern prefilled with the row's display title: no client-side conflict rule exists (the host normalizes and may reject with `title-invalid`, rendered in the dialog alert), and confirming an unchanged title is deliberately allowed — it pins the current automatic title against regeneration. The Session row's Archive action commits without a confirmation dialog (non-destructive: the log and the workspace accounting slot remain) through `ctx.workspaces.archiveSession`; the row disappears from every grouping surface — workspace groups, Ungrouped, content search, and the flat list — when the archive-set echo lands, and failures are console diagnostics that leave the tree unchanged. A blank New Session row is a pure placeholder: it renders no row menu and no time label (nothing has happened in it yet), so rename, fork, and archive first apply once the first prompt lands.
++The picker lists real Host Workspace entities through the global `useWorkspaces` hook. Selecting a Workspace invokes the slot owner's `onPick` callback to retarget the frontend Session object. Distinct canonical paths remain separate id-keyed Workspaces when their basenames and display titles match; the sidebar hover detail exposes the full path. Each registration declares a **directory-flow child hole** (`single` kind: `conversation.hero.workspace.directoryFlow` / `sidebar.workspaces.directoryFlow`) that the composed picker package's client half fills with its picking interaction — the [`-native`](../../host/directory-picker-native/README.md) backend's renderless OS-chooser driver today, an in-app browsing dialog under a `-browse` composition. The flat **Add workspace...** action renders only while the surface's hole is occupied (occupancy read per menu render; an empty hole means the composition has no picking affordance — the seam's documented no-flow default, under which the sidebar header drops its add button rather than offering a dead one). This package owns the trigger and the adoption: the occupant reports one picked path per open through the hole's owner conversation (`open`/`busy`/`onPicked`/`onCancel`/`onError`), and the owner adopts it through the object layer, selecting the committed Workspace only after its list projection has refreshed; cancellation is silent, and directory-picking or path-adoption errors land in the retryable folder dialog whose **Choose again** reopens the flow. Selecting an existing Workspace, or entering one just adopted, settles only after its blank Session is ready; failure preserves the Host error message in a separate **Couldn’t enter workspace** dialog whose **Retry** repeats the same Workspace selection without reopening the directory flow. Adding has exactly one route: the occupant's own create-folder affordance already covers a brand-new directory, so no separate create-by-name dialog exists. A menu only appears where there is something to choose between — with no Workspace listed, the anchor gesture raises the flow directly instead of a one-row popover, and it waits for the list baseline before treating an empty list as final. The runtime Session and Workspace services own materialization. The Workspace row's Delete action opens a confirmation that states the retention boundary, blocks duplicate submission, and keeps failures open; success removes the group while its Sessions remain under Ungrouped. The Session row's Rename action opens the same browser-owned dialog pattern prefilled with the row's display title: no client-side conflict rule exists (the host normalizes and may reject with `title-invalid`, rendered in the dialog alert), and confirming an unchanged title is deliberately allowed — it pins the current automatic title against regeneration. The Session row's Archive action commits without a confirmation dialog (non-destructive: the log and the workspace accounting slot remain) through `ctx.workspaces.archiveSession`; the row disappears from every grouping surface — workspace groups, Ungrouped, content search, and the flat list — when the archive-set echo lands, and failures are console diagnostics that leave the tree unchanged. A blank New Session row is a pure placeholder: it renders no row menu and no time label (nothing has happened in it yet), so rename, fork, and archive first apply once the first prompt lands.
+ 
+ Workspace and Session hover cards copy the value their row clips: activating a Workspace card writes its full directory path, while activating a non-blank Session card writes its full display title. A provisional blank New Session card remains read-only because its localized label is a placeholder rather than session content. The card reports the dictionary-driven copied state only after the browser accepts the clipboard write.
+ 
+diff --git a/packages/client/ui-workspace/README.zh.md b/packages/client/ui-workspace/README.zh.md
+index c83f1c5..7a51890 100644
+--- a/packages/client/ui-workspace/README.zh.md
++++ b/packages/client/ui-workspace/README.zh.md
+@@ -8,7 +8,7 @@
+ 
+ 折叠搜索是视图和添加操作旁的一枚区头按钮。在轨道中，添加和搜索会渲染为沿外壳共用横向进入路径移动的 36px 控件。激活搜索后，输入框会扩展并占据区头；点击外部只会收起经清除首尾空白后为空的查询，而清除控件总会重置并收起搜索。非空白查询会以单一扁平结果列表替代任一浏览模式：不区分大小写的标题和 Workspace 子串匹配项会立即显示，经 250 ms 防抖的 Host 请求则会加入经过排序的当前对话内容匹配项及其摘要片段。英文搜索输入框及其防御性请求路径会移除 NUL，将查询限制在传输 schema 规定的 500 个 UTF-16 代码单元内且不会拆分代理项对，并保留现有的防抖与取消行为。每次新查询都会中止前一个请求；内容搜索失败时，元数据匹配项仍会显示，同时给出警告。列表最多显示 20 条结果，并会在查询过宽时提示用户缩小范围；打开所选 Session 时既不会清除查询，也不会跳转至特定事件。
+ 
+-该选择器通过全局 `useWorkspaces` hook 列出真实的 Host Workspace 实体。选择 Workspace 会调用 slot owner 的 `onPick` 回调，重新定位前端 Session 对象。不同的规范化路径即使 basename 和显示标题相同，仍会作为由 id 区分的独立 Workspace；侧边栏的悬停详情会显示完整路径。每个注册各自声明一个**目录流子 slot**（`single` kind：`conversation.hero.workspace.directoryFlow`／`sidebar.workspaces.directoryFlow`），由组合的选择器包 client half 填入其选取交互——今天是 [`-native`](../../host/directory-picker-native/README.md) 后端的无渲染 OS 选择器驱动，`-browse` 组合下则是应用内浏览对话框。平铺显示的 **添加工作区…** 操作仅在当前界面的 slot 被占用时渲染（每次菜单渲染读取占用状态；slot 为空意味着该组合没有目录选择能力——seam 文档化的无流程默认行为，此时侧边栏区头直接不渲染添加按钮，而非留下一个点了没反应的按钮）。本包持有触发与接纳：占用方通过 slot 的属主交互约定（`open`/`busy`/`onPicked`/`onCancel`/`onError`）每次打开上报一个所选路径，owner 通过对象层接纳它，并等待 Workspace 列表投影刷新后才选中已提交的 Workspace；取消操作不会显示提示，错误落入可重试的文件夹对话框，其 **重新选择** 会重新打开流程。添加只有一条路径：占用者自带的新建文件夹能力已经覆盖了全新目录，因此不再单设按名称创建的对话框。菜单只在确有多个目标可选时出现——没有 Workspace 可列时，锚点手势直接拉起流程，而不是弹出只有一行的浮层；在列表基线落地前，空列表不算最终结果。运行时 Session 与 Workspace 服务负责物化。Workspace 行内的 Delete 操作会打开确认框，说明保留边界、阻止重复提交，并在失败时保持打开；成功后，该分组会被移除，其 Session 则留在 Ungrouped 下。Session 行内的 Rename 操作打开同款浏览器持有的对话框，并以该行的显示标题预填：客户端不设名称冲突规则（host 负责规范化，可能以 `title-invalid` 拒绝，错误渲染在对话框告警区）；确认未修改的标题是有意允许的——这正是把当前自动标题钉住、不再被重新生成覆盖的手势。Session 行内的 Archive 操作不经确认对话框直接提交（非破坏性：日志和 workspace 记账席位保持不变），通过 `ctx.workspaces.archiveSession` 归档；归档集合回声落地后，该行从所有分组视图——workspace 分组、Ungrouped、内容搜索和平铺列表——中消失，失败只作为控制台诊断输出，树保持不变。空白的「新会话」行只是占位符：不渲染行菜单和时间标签（其中还没有发生任何事），重命名、fork 和归档都从首条提示词落地后才可用。
++该选择器通过全局 `useWorkspaces` hook 列出真实的 Host Workspace 实体。选择 Workspace 会调用 slot owner 的 `onPick` 回调，重新定位前端 Session 对象。不同的规范化路径即使 basename 和显示标题相同，仍会作为由 id 区分的独立 Workspace；侧边栏的悬停详情会显示完整路径。每个注册各自声明一个**目录流子 slot**（`single` kind：`conversation.hero.workspace.directoryFlow`／`sidebar.workspaces.directoryFlow`），由组合的选择器包 client half 填入其选取交互——今天是 [`-native`](../../host/directory-picker-native/README.md) 后端的无渲染 OS 选择器驱动，`-browse` 组合下则是应用内浏览对话框。平铺显示的 **添加工作区…** 操作仅在当前界面的 slot 被占用时渲染（每次菜单渲染读取占用状态；slot 为空意味着该组合没有目录选择能力——seam 文档化的无流程默认行为，此时侧边栏区头直接不渲染添加按钮，而非留下一个点了没反应的按钮）。本包持有触发与接纳：占用方通过 slot 的属主交互约定（`open`/`busy`/`onPicked`/`onCancel`/`onError`）每次打开上报一个所选路径，owner 通过对象层接纳它，并等待 Workspace 列表投影刷新后才选中已提交的 Workspace；取消操作不会显示提示；目录选取或路径接纳错误落入可重试的文件夹对话框，其 **重新选择** 会重新打开流程。选择既有 Workspace 或进入刚接纳的 Workspace 时，只有其空白 Session 准备完毕才算完成；失败会在独立的 **无法进入工作区** 对话框中保留 Host 错误原文，**重试**会再次选择同一个 Workspace，而不会重新打开目录流程。添加只有一条路径：占用者自带的新建文件夹能力已经覆盖了全新目录，因此不再单设按名称创建的对话框。菜单只在确有多个目标可选时出现——没有 Workspace 可列时，锚点手势直接拉起流程，而不是弹出只有一行的浮层；在列表基线落地前，空列表不算最终结果。运行时 Session 与 Workspace 服务负责物化。Workspace 行内的 Delete 操作会打开确认框，说明保留边界、阻止重复提交，并在失败时保持打开；成功后，该分组会被移除，其 Session 则留在 Ungrouped 下。Session 行内的 Rename 操作打开同款浏览器持有的对话框，并以该行的显示标题预填：客户端不设名称冲突规则（host 负责规范化，可能以 `title-invalid` 拒绝，错误渲染在对话框告警区）；确认未修改的标题是有意允许的——这正是把当前自动标题钉住、不再被重新生成覆盖的手势。Session 行内的 Archive 操作不经确认对话框直接提交（非破坏性：日志和 workspace 记账席位保持不变），通过 `ctx.workspaces.archiveSession` 归档；归档集合回声落地后，该行从所有分组视图——workspace 分组、Ungrouped、内容搜索和平铺列表——中消失，失败只作为控制台诊断输出，树保持不变。空白的「新会话」行只是占位符：不渲染行菜单和时间标签（其中还没有发生任何事），重命名、fork 和归档都从首条提示词落地后才可用。
+ 
+ Workspace 和 Session 悬浮卡片会复制对应行被截断的值：激活 Workspace 卡片会写入其完整目录路径，激活非空白 Session 卡片则会写入其完整显示标题。临时的空白「新会话」卡片保持只读，因为其本地化标签是占位文案，并非会话内容。只有浏览器接受剪贴板写入后，卡片才会显示由字典提供的已复制状态。
+ 
+diff --git a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
+index d0f6835..fb071fd 100644
+--- a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
++++ b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
+@@ -460,7 +460,9 @@ function SessionTree({
+                 onCreate={() => {
+                   if (group.workspaceId !== undefined) {
+                     setGroupExpanded(group.key, true)
+-                    startSession(group.workspaceId)
++                    void startSession(group.workspaceId).catch((reason: unknown) => {
++                      console.warn('new session failed:', reason)
++                    })
+                   }
+                 }}
+                 drag={workspaceDragProps}
+@@ -1077,9 +1079,9 @@ export function WorkspaceBrowser({
+           renderDirectoryFlow={owner => renderSlot('sidebar.workspaces.directoryFlow', owner)}
+           addOnly
+           side="right"
+-          onPick={(workspaceId) => {
++          onPick={async (workspaceId) => {
+             setWsPickerOpen(false)
+-            startSession(workspaceId)
++            await startSession(workspaceId)
+           }}
+           onClose={() => { setWsPickerOpen(false) }}
+         />
+diff --git a/packages/client/ui-workspace/src/client/WorkspacePicker.tsx b/packages/client/ui-workspace/src/client/WorkspacePicker.tsx
+index c72d8ca..31a50d8 100644
+--- a/packages/client/ui-workspace/src/client/WorkspacePicker.tsx
++++ b/packages/client/ui-workspace/src/client/WorkspacePicker.tsx
+@@ -38,8 +38,8 @@ export interface WorkspacePickFlowProps {
+   useDirectoryFlow: SnapshotSelectorHook<boolean>
+   /** Render this surface's directory-flow hole with the owner conversation (the entry's narrowed renderSlot). */
+   renderDirectoryFlow: (owner: DirectoryFlowOwnerProps) => ReactNode
+-  /** A real Workspace was picked or created. */
+-  onPick: (workspaceId: WorkspaceId) => void
++  /** Select a real Workspace and settle after its Session is ready. */
++  onPick: (workspaceId: WorkspaceId) => Promise<void>
+   /** Close the popover (outside click / Escape / post-pick). */
+   onClose: () => void
+   /** Only offer the add action, hide existing workspaces. */
+@@ -77,13 +77,16 @@ export function WorkspacePickFlow({
+   )
+   const [errorOpen, setErrorOpen] = useState(false)
+   const [modalError, setModalError] = useState<string | null>(null)
++  const [modalKind, setModalKind] = useState<'folder' | 'workspace'>('folder')
++  const [retryAction, setRetryAction] = useState<(() => void) | null>(null)
+   const [flowOpen, setFlowOpen] = useState(false)
+   const [pickingFolder, setPickingFolder] = useState(false)
++  const [selectingWorkspace, setSelectingWorkspace] = useState(false)
+   // One picking interaction at a time: while the flow is open (native chooser
+   // pending, browse dialog up) or its pick is being adopted, every other
+   // menu action stays disabled — a late outcome must not race a concurrent
+   // selection or adoption.
+-  const flowBusy = flowOpen || pickingFolder
++  const flowBusy = flowOpen || pickingFolder || selectingWorkspace
+ 
+   // The occupied hole gates the picking affordance: with no composed flow the
+   // entry simply is not there (the seam's documented no-flow default). The
+@@ -120,26 +123,44 @@ export function WorkspacePickFlow({
+   const closeModal = (): void => {
+     setErrorOpen(false)
+     setModalError(null)
++    setRetryAction(null)
+   }
+ 
+-  /** Adopt a picked directory; failures land in the folder-error dialog (Choose again reopens the flow). */
+-  const adoptDirectory = (path: string): Promise<void> =>
+-    createWorkspace({ path }).then((workspace) => {
+-      setFlowOpen(false)
+-      onPick(workspace.workspaceId)
+-    }).catch((reason: unknown) => {
+-      setModalError(reason instanceof Error ? reason.message : String(reason))
+-      setFlowOpen(false)
+-      setErrorOpen(true)
+-    })
+-
+   const openDirectoryFlow = useCallback((): void => {
+     onClose()
+     setErrorOpen(false)
+     setModalError(null)
++    setRetryAction(null)
+     setFlowOpen(true)
+   }, [onClose])
+ 
++  const showError = (kind: 'folder' | 'workspace', reason: unknown, retry: () => void): void => {
++    setModalKind(kind)
++    setModalError(reason instanceof Error ? reason.message : String(reason))
++    setRetryAction(() => retry)
++    setErrorOpen(true)
++  }
++
++  const attemptWorkspace = (workspaceId: WorkspaceId): void => {
++    onClose()
++    setSelectingWorkspace(true)
++    void onPick(workspaceId)
++      .catch((reason: unknown) => {
++        showError('workspace', reason, () => { attemptWorkspace(workspaceId) })
++      })
++      .finally(() => { setSelectingWorkspace(false) })
++  }
++
++  /** Adopt a picked directory; path failures retry the picker, while Session failures retry the Workspace. */
++  const adoptDirectory = (path: string): Promise<void> =>
++    createWorkspace({ path }).then((workspace) => {
++      setFlowOpen(false)
++      attemptWorkspace(workspace.workspaceId)
++    }).catch((reason: unknown) => {
++      setFlowOpen(false)
++      showError('folder', reason, openDirectoryFlow)
++    })
++
+   // A menu exists to disambiguate between targets. With no workspaces listed
+   // and the add action the only entry left, the anchor gesture IS that action:
+   // a one-row popover would cost a click and offer nothing to choose between.
+@@ -167,8 +188,7 @@ export function WorkspacePickFlow({
+     onCancel: () => { setFlowOpen(false) },
+     onError: (message) => {
+       setFlowOpen(false)
+-      setModalError(message)
+-      setErrorOpen(true)
++      showError('folder', message, openDirectoryFlow)
+     },
+   }
+ 
+@@ -177,7 +197,7 @@ export function WorkspacePickFlow({
+       openDirectoryFlow()
+       return
+     }
+-    onPick(id as WorkspaceId)
++    attemptWorkspace(id as WorkspaceId)
+   }
+ 
+   return (
+@@ -200,13 +220,22 @@ export function WorkspacePickFlow({
+         open={errorOpen}
+         onClose={closeModal}
+         closeLabel={t('close')}
+-        title={t('folderError.title')}
++        title={t(modalKind === 'folder' ? 'folderError.title' : 'workspaceError.title')}
+         footer={(
+           <>
+             <Button variant="outline" className={css.modalAction} onClick={closeModal}>{t('cancel')}</Button>
+-            {/* Retrying needs an occupant to serve the flow; without one the
+-              * button would open a flow nobody can answer or cancel. */}
+-            <Button variant="primary" className={css.modalAction} disabled={!flowAvailable} onClick={openDirectoryFlow}>{t('folderError.retry')}</Button>
++            <Button
++              variant="primary"
++              className={css.modalAction}
++              disabled={retryAction === null || (modalKind === 'folder' && !flowAvailable)}
++              onClick={() => {
++                const retry = retryAction
++                closeModal()
++                retry?.()
++              }}
++            >
++              {t(modalKind === 'folder' ? 'folderError.retry' : 'workspaceError.retry')}
++            </Button>
+           </>
+         )}
+       >
+diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
+index 8027a36..36ca3e0 100644
+--- a/packages/client/ui-workspace/src/client/contract/slots.ts
++++ b/packages/client/ui-workspace/src/client/contract/slots.ts
+@@ -95,7 +95,7 @@ export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
+    * open it; without an explicit workspace, inherit the current Session
+    * Workspace, then the recent Workspace, or clear into the New Session view.
+    */
+-  startSession: (workspaceId?: WorkspaceId) => void
++  startSession: (workspaceId?: WorkspaceId) => Promise<void>
+   /** Open a real Session. */
+   open: (sessionId: SessionId) => void
+   /**
+diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
+index 6b14243..375483a 100644
+--- a/packages/client/ui-workspace/src/client/index.ts
++++ b/packages/client/ui-workspace/src/client/index.ts
+@@ -70,7 +70,7 @@ export function apply(ctx: ClientContext): void {
+   const browserInjected = (): WorkspaceBrowserInjected => ({
+     // Explicit group actions keep their target; unscoped New Session inherits
+     // the current Session Workspace before the recent-Workspace fallback.
+-    startSession: (workspaceId) => { ctx.workspaces.startSession(workspaceId) },
++    startSession: async (workspaceId) => { await ctx.workspaces.startSession(workspaceId) },
+     open: (sessionId) => { ctx.sessions.open(sessionId) },
+     searchSessions,
+     searchResultLimit: ctx.sessions.searchResultLimit,
+diff --git a/packages/client/ui-workspace/src/client/locales.ts b/packages/client/ui-workspace/src/client/locales.ts
+index c08fd93..024bc17 100644
+--- a/packages/client/ui-workspace/src/client/locales.ts
++++ b/packages/client/ui-workspace/src/client/locales.ts
+@@ -35,6 +35,8 @@ export const zh = {
+   'conflict.named': '已存在名为“{name}”的工作区。',
+   'folderError.title': '无法打开文件夹',
+   'folderError.retry': '重新选择',
++  'workspaceError.title': '无法进入工作区',
++  'workspaceError.retry': '重试',
+   'rename': '重命名',
+   'rename.workspace.title': '重命名工作区',
+   'rename.session.title': '重命名会话',
+@@ -104,6 +106,8 @@ export const en = {
+   'conflict.named': 'A workspace named “{name}” already exists.',
+   'folderError.title': 'Couldn’t open folder',
+   'folderError.retry': 'Choose again',
++  'workspaceError.title': 'Couldn’t enter workspace',
++  'workspaceError.retry': 'Retry',
+   'rename': 'Rename',
+   'rename.workspace.title': 'Rename workspace',
+   'rename.session.title': 'Rename session',
+diff --git a/packages/client/ui-workspace/tests/apply.client.spec.ts b/packages/client/ui-workspace/tests/apply.client.spec.ts
+index 016af31..866703f 100644
+--- a/packages/client/ui-workspace/tests/apply.client.spec.ts
++++ b/packages/client/ui-workspace/tests/apply.client.spec.ts
+@@ -20,7 +20,7 @@ async function bench() {
+     path: 'name' in input ? `/projects/${input.name}` : input.path,
+     title: 'new', sessionIds: [], createdAt: '0', updatedAt: '0',
+   }))
+-  const startSession = vi.fn()
++  const startSession = vi.fn(async () => undefined)
+   const rename = vi.fn(async () => ({}))
+   const insertSessionBefore = vi.fn(async () => ({}))
+   const open = vi.fn()
+diff --git a/packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx
+index 5b1d295..37dc9ec 100644
+--- a/packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx
++++ b/packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx
+@@ -81,8 +81,8 @@ function mount(
+   items: readonly WorkspaceView[] = [workspace('alpha', 'Alpha')],
+   createWorkspace = vi.fn(),
+   occupancy = occupancySource(),
++  onPick = vi.fn(async () => undefined),
+ ) {
+-  const onPick = vi.fn()
+   const onClose = vi.fn()
+   const anchorRef = anchor()
+   const { probe, renderSlot } = flowProbe()
+@@ -122,6 +122,24 @@ describe('WorkspacePicker', () => {
+     expect(b.onPick).toHaveBeenCalledWith(wid('beta'))
+   })
+ 
++  it('forwards Workspace selection failures and retries the same Workspace', async () => {
++    const onPick = vi.fn()
++      .mockRejectedValueOnce(new Error('EPERM: protected system directory'))
++      .mockResolvedValueOnce(undefined)
++    mount([workspace('alpha', 'Alpha')], vi.fn(), occupancySource(), onPick)
++
++    fireEvent.click(screen.getByRole('menuitem', { name: 'Alpha' }))
++    await waitFor(() => {
++      expect(screen.getByRole('dialog', { name: '无法进入工作区' })).toBeTruthy()
++    })
++    expect(screen.getByRole('alert').textContent).toBe('EPERM: protected system directory')
++
++    fireEvent.click(screen.getByRole('button', { name: '重试' }))
++    await waitFor(() => { expect(onPick).toHaveBeenCalledTimes(2) })
++    expect(onPick).toHaveBeenNthCalledWith(2, wid('alpha'))
++    expect(screen.queryByRole('dialog')).toBeNull()
++  })
++
+   it('opens the composed directory flow, adopts its picked path, and selects the returned Workspace', async () => {
+     const created = { ...workspace('adopted'), path: '/tmp/project', title: 'project' }
+     const createWorkspace = vi.fn(async () => created)
+-- 
+2.54.0
+
