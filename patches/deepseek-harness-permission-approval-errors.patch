@@ -1,0 +1,416 @@
+From f6b1ead8c0709129663f06c8b75faf11b6fe4eea Mon Sep 17 00:00:00 2001
+From: Esilama_mac <2414245047@qq.com>
+Date: Tue, 18 Aug 2026 14:02:35 +0800
+Subject: [PATCH] fix(web): surface permission and approval failures
+
+---
+ ...n-and-approval-failures-reach-ui.i18n.yaml |  6 ++
+ ...rmission-and-approval-failures-reach-ui.md | 31 ++++++++++
+ ...ssion-and-approval-failures-reach-ui.zh.md | 31 ++++++++++
+ .../ui-conversation/src/client/locales.ts     |  8 +++
+ .../client/skeleton/ApprovalPanel.module.css  |  6 ++
+ .../src/client/skeleton/ApprovalPanel.tsx     | 12 +++-
+ .../skeleton/PermissionSelect.module.css      |  9 +++
+ .../src/client/skeleton/PermissionSelect.tsx  | 38 +++++++++++-
+ .../tests/approval-panel.client.spec.tsx      | 60 +++++++++++++++++++
+ .../tests/input-bar.client.spec.tsx           | 30 +++++++++-
+ 10 files changed, 225 insertions(+), 6 deletions(-)
+ create mode 100644 .agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.i18n.yaml
+ create mode 100644 .agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.md
+ create mode 100644 .agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.zh.md
+ create mode 100644 packages/client/ui-conversation/tests/approval-panel.client.spec.tsx
+
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.i18n.yaml b/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.i18n.yaml
+new file mode 100644
+index 0000000..74cd26f
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.i18n.yaml
+@@ -0,0 +1,6 @@
++# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
++# side as of the last confirmed-consistent state. Both languages carry equal authority;
++# after editing either side, bring the other along and re-record with:
++#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.md
++2026-08-17-permission-and-approval-failures-reach-ui.md: f034394d5cedae21f47fb2a5fbbac0014e369ab0
++2026-08-17-permission-and-approval-failures-reach-ui.zh.md: e6a4f8bc8d792590bed545c15bda1db11a34a85c
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.md b/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.md
+new file mode 100644
+index 0000000..f034394
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.md
+@@ -0,0 +1,31 @@
++# Agent Note: Permission and approval failures reach the UI
++
++Status: implemented
++
++English | [中文](2026-08-17-permission-and-approval-failures-reach-ui.zh.md)
++
++## Problem
++
++The composer optimistically disabled permission controls and approval buttons, but dropped rejected command or response receipts. A failed permission command cleared the optimistic selection without telling the operator; a failed approval answer re-enabled the buttons without explaining whether the Host rejected the decision or the transport failed. Remote users could not distinguish an unchanged authoritative permission from a successful change.
++
++## Decision
++
++Permission submission clears its transient optimistic pick on every settlement. A rejected or thrown command opens a retryable modal containing the original error, keeps the Host-projected current value as the trigger label, and retries the same permission id. Full access retry reuses only the already confirmed choice; it does not bypass the risk confirmation for a different id.
++
++Approval answer failures re-arm the single-flight action row and render the original error in an alert. The pending carrier remains authoritative and the panel remains mounted until its resolved frame arrives. Task locking and carrier replacement continue to clear stale local state through the existing owner lifecycle.
++
++## Alternatives considered
++
++**Leave the controls disabled after failure.** Rejected because a transient relay or Host response failure would require abandoning the current Session to recover.
++
++**Treat a rejected command as a successful local permission change.** Rejected because the client projection is Host-owned; displaying the optimistic id after rejection would misrepresent the permission actually applied to the next tool call.
++
++**Use a generic toast with no retry action.** Rejected because permission and approval operations are consequential and the initiating controls remain the only unambiguous retry target.
++
++## Consequences
++
++The composer has two additional localized error surfaces and retains no client-only permission authority. Error messages may include Host-provided platform detail and are kept in the existing browser process; no new wire or durable fields are introduced. Approval response retries remain explicit and single-flight.
++
++## Testing
++
++The InputBar suite covers permission rejection, authoritative-value rollback, same-id retry, and a resolved retry. The ApprovalFlow suite covers a rejected response, re-arming, retry, and duplicate-click suppression. Focused GUI tests pass; the clean isolated typecheck remains blocked by pre-existing generated remote artifacts unavailable in this worktree.
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.zh.md b/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.zh.md
+new file mode 100644
+index 0000000..e6a4f8b
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-17-permission-and-approval-failures-reach-ui.zh.md
+@@ -0,0 +1,31 @@
++# Agent Note: 权限与审批失败会到达 UI
++
++Status: implemented
++
++[English](2026-08-17-permission-and-approval-failures-reach-ui.md) | 中文
++
++## Problem
++
++Composer 会乐观地禁用权限控制和审批按钮，但会丢弃 command 或 response receipt 的拒绝结果。权限 command 失败时，乐观选择会被清掉，却没有告诉操作者；审批回答失败时，按钮会重新启用，却没有说明是 Host 拒绝了决策还是传输失败。远程用户无法区分仍未改变的权威权限与已经成功的切换。
++
++## Decision
++
++权限提交在每次结算时清除临时乐观 pick。command 拒绝或抛错时打开可重试模态框，保留原始错误，继续使用 Host 投影的当前值作为 trigger label，并重试同一个权限 id。Full access 的重试只复用已经确认的选择，不会对另一个 id 绕过风险确认。
++
++审批回答失败时重新启用 single-flight action row，并在 alert 中显示原始错误。pending carrier 仍是权威来源，直到 resolved frame 到达前面板保持挂载。任务锁定和 carrier 替换仍由既有 owner 生命周期清除陈旧本地状态。
++
++## Alternatives considered
++
++**失败后继续禁用控制。** 否决，因为一次暂时的 relay 或 Host 响应失败会迫使用户放弃当前 Session 才能恢复。
++
++**把拒绝 command 当作本地权限切换成功。** 否决，因为 client 投影由 Host 持有；拒绝后继续显示乐观 id 会错误表示下一次工具调用实际拥有的权限。
++
++**只用没有重试动作的通用 toast。** 否决，因为权限和审批属于有后果的操作，而发起它们的控制正是唯一无歧义的重试入口。
++
++## Consequences
++
++Composer 增加两个本地化错误表层，但不持有 client-only 权限权威。错误消息可以包含 Host 提供的平台细节，仍留在现有 browser 进程中；不增加 wire 或持久字段。审批 response 重试仍必须显式执行，并保持 single-flight。
++
++## Testing
++
++InputBar 套件覆盖权限拒绝、权威值回滚、同 id 重试和成功重试。ApprovalFlow 套件覆盖拒绝 response、按钮重启、重试和重复点击抑制。聚焦 GUI 测试通过；干净隔离 worktree 的类型检查仍被该 worktree 缺失的既有 generated remote artifacts 阻塞。
+diff --git a/packages/client/ui-conversation/src/client/locales.ts b/packages/client/ui-conversation/src/client/locales.ts
+index c9b6f65..b541431 100644
+--- a/packages/client/ui-conversation/src/client/locales.ts
++++ b/packages/client/ui-conversation/src/client/locales.ts
+@@ -70,6 +70,9 @@ export const zh = {
+   'access.confirm.acknowledge': '我已了解风险，并愿意继续',
+   'access.confirm.cancel': '取消',
+   'access.confirm.enable': '启用 Full access',
++  'access.error.title': '权限设置未生效',
++  'access.error.rejected': '宿主未接受该权限设置，请重试。',
++  'access.error.retry': '重试',
+   'hero.headline': '探索未至之境',
+   'hero.preview': '预览版',
+   'hero.chooseWorkspace': '选择工作区',
+@@ -138,6 +141,7 @@ export const zh = {
+   'approval.escalation': '工具 {toolName} 请求越权执行',
+   'approval.reject': '拒绝',
+   'approval.allowOnce': '允许一次',
++  'approval.answerFailed': '提交审批结果失败：{message}',
+   'ask.rowTitle': '提问',
+   'ask.waiting': '等待回答',
+   'ask.cancelled': '已取消',
+@@ -239,6 +243,9 @@ export const en = {
+   'access.confirm.acknowledge': 'I understand the risks and want to continue',
+   'access.confirm.cancel': 'Cancel',
+   'access.confirm.enable': 'Enable Full access',
++  'access.error.title': 'Permission change failed',
++  'access.error.rejected': 'The Host did not accept this permission change. Try again.',
++  'access.error.retry': 'Retry',
+   'hero.headline': 'Into the Unknown',
+   'hero.preview': 'Preview',
+   'hero.chooseWorkspace': 'Choose workspace',
+@@ -307,6 +314,7 @@ export const en = {
+   'approval.escalation': 'Tool {toolName} requests privileged execution',
+   'approval.reject': 'Reject',
+   'approval.allowOnce': 'Allow once',
++  'approval.answerFailed': 'Could not submit approval result: {message}',
+   'ask.rowTitle': 'Ask question',
+   'ask.waiting': 'waiting',
+   'ask.cancelled': 'cancelled',
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.module.css b/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.module.css
+index 87cdc07..fdc5838 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.module.css
+@@ -89,6 +89,12 @@
+    bottom pad below, so the resting card is unchanged. Buttons are the shared
+    outline/primary capsules (Button atom, matching QuestionComposer's footer);
+    only the reject's danger hover is local. */
++.error {
++  margin: 0 16px 12px;
++  color: var(--dsw-alias-state-error-primary);
++  overflow-wrap: anywhere;
++}
++
+ .actionRow {
+   display: flex;
+   justify-content: flex-end;
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.tsx b/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.tsx
+index e700b11..93d3dab 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/ApprovalPanel.tsx
+@@ -49,7 +49,7 @@ export function ApprovalPanel(props: ApprovalComposerProps) {
+   return <ApprovalFlow key={approval.key} pending={approval} t={props.t} {...command === undefined ? {} : { command }} />
+ }
+ 
+-function ApprovalFlow({ pending, command, t }: {
++export function ApprovalFlow({ pending, command, t }: {
+   pending: PendingApproval
+   command?: string
+   t: ApprovalComposerProps['t']
+@@ -58,9 +58,16 @@ function ApprovalFlow({ pending, command, t }: {
+   // lands; until then the buttons must not re-fire. An answer failure
+   // (rejected receipt / transport) re-arms them for retry.
+   const [answered, setAnswered] = useState(false)
++  const [answerError, setAnswerError] = useState<string | null>(null)
+   const answer = (outcome: 'allowed-once' | 'rejected'): void => {
+     setAnswered(true)
+-    void pending.answer(outcome).catch(() => { setAnswered(false) })
++    setAnswerError(null)
++    void pending.answer(outcome).catch((reason: unknown) => {
++      setAnswered(false)
++      setAnswerError(t('approval.answerFailed', {
++        message: reason instanceof Error ? reason.message : String(reason),
++      }))
++    })
+   }
+   return (
+     <div className={css.root} data-approval-key={pending.key}>
+@@ -73,6 +80,7 @@ function ApprovalFlow({ pending, command, t }: {
+           <div className={css.headline}>{pending.reason ?? t('approval.escalation', { toolName: pending.toolName })}</div>
+           {command !== undefined && <div className={css.command}>{command}</div>}
+         </div>
++        {answerError !== null && <div className={css.error} role="alert">{answerError}</div>}
+         <div className={css.actionRow}>
+           <Button variant="outline" className={css.reject} disabled={answered} onClick={() => { answer('rejected') }}>
+             {t('approval.reject')}
+diff --git a/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.module.css b/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.module.css
+index 22f64d6..ed05a4a 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.module.css
+@@ -74,3 +74,12 @@
+ .chevronOpen {
+   transform: rotate(180deg);
+ }
++
++.error {
++  color: var(--dsw-alias-state-error-primary);
++  overflow-wrap: anywhere;
++}
++
++.modalAction {
++  min-width: 96px;
++}
+diff --git a/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx b/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx
+index 5230f59..7dd1d38 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx
+@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
+ import type { ReactNode } from 'react'
+ import clsx from 'clsx'
+ import type { PermissionSelect as PermissionSelectValue } from '@deepseek-ai/dsh-permission-presets/client'
+-import { IconChevronDownOutline14, Menu, RiskConfirmation } from '@deepseek-ai/dsh-client-ui-primitives'
++import { Button, IconChevronDownOutline14, Menu, Modal, RiskConfirmation } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { ComposerBarProps } from '../contract/slots.ts'
+ import css from './PermissionSelect.module.css'
+@@ -74,12 +74,14 @@ export function PermissionSelect({ value, locked, command, t }: PermissionSelect
+   const [open, setOpen] = useState(false)
+   const [confirmation, setConfirmation] = useState<string | null>(null)
+   const [acknowledged, setAcknowledged] = useState(false)
++  const [submissionError, setSubmissionError] = useState<{ id: string; message: string } | null>(null)
+ 
+   useEffect(() => {
+     if (!locked && value !== undefined) return
+     setOpen(false)
+     setAcknowledged(false)
+     setConfirmation(null)
++    setSubmissionError(null)
+   }, [locked, value])
+ 
+   if (value === undefined) return null
+@@ -96,10 +98,16 @@ export function PermissionSelect({ value, locked, command, t }: PermissionSelect
+     })
+ 
+   const submit = (id: string): void => {
++    setSubmissionError(null)
+     setPick(id)
+     void command(`/permission ${id}`)
+-      .catch(() => false)
+-      .then(() => { setPick(null) })
++      .then((accepted) => {
++        if (!accepted) throw new Error(t('access.error.rejected'))
++      })
++      .catch((reason: unknown) => {
++        setSubmissionError({ id, message: reason instanceof Error ? reason.message : String(reason) })
++      })
++      .finally(() => { setPick(null) })
+   }
+ 
+   const choose = (id: string): void => {
+@@ -154,6 +162,30 @@ export function PermissionSelect({ value, locked, command, t }: PermissionSelect
+           </button>
+         }
+       />
++      <Modal
++        open={submissionError !== null}
++        onClose={() => { setSubmissionError(null) }}
++        closeLabel={t('close')}
++        title={t('access.error.title')}
++        footer={(
++          <>
++            <Button variant="outline" className={css.modalAction} onClick={() => { setSubmissionError(null) }}>{t('cancel')}</Button>
++            <Button
++              variant="primary"
++              className={css.modalAction}
++              onClick={() => {
++                const retryId = submissionError?.id
++                setSubmissionError(null)
++                if (retryId !== undefined) submit(retryId)
++              }}
++            >
++              {t('access.error.retry')}
++            </Button>
++          </>
++        )}
++      >
++        <div className={css.error} role="alert">{submissionError?.message}</div>
++      </Modal>
+       <RiskConfirmation
+         open={confirmation !== null}
+         title={t('access.confirm.title')}
+diff --git a/packages/client/ui-conversation/tests/approval-panel.client.spec.tsx b/packages/client/ui-conversation/tests/approval-panel.client.spec.tsx
+new file mode 100644
+index 0000000..8bc0559
+--- /dev/null
++++ b/packages/client/ui-conversation/tests/approval-panel.client.spec.tsx
+@@ -0,0 +1,60 @@
++// @vitest-environment jsdom
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
++import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
++import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
++import { ApprovalFlow } from '../src/client/skeleton/ApprovalPanel.tsx'
++import { PendingApproval } from '../src/client/contract/slots.ts'
++import { zh } from '../src/client/locales.ts'
++
++afterEach(cleanup)
++
++const t = makeTranslate(zh, commonZh)
++
++function pending(answer: (outcome: 'allowed-once' | 'rejected') => Promise<void>): PendingApproval {
++  return new PendingApproval({
++    key: 'approval-1',
++    sessionId: 'session-1' as never,
++    payload: {
++      approvalId: 'approval-1',
++      toolName: 'bash',
++      reason: '需要执行命令',
++    },
++    respond: async ({ value }) => {
++      await answer(value.outcome)
++      return { accepted: true }
++    },
++  } as never)
++}
++
++describe('ApprovalFlow', () => {
++  it('shows answer failure and re-arms the same approval action', async () => {
++    const answer = vi.fn()
++      .mockRejectedValueOnce(new Error('approval transport offline'))
++      .mockResolvedValueOnce(undefined)
++    render(<ApprovalFlow pending={pending(answer)} t={t} />)
++
++    const allow = screen.getByRole('button', { name: '允许一次' })
++    fireEvent.click(allow)
++    expect((allow as HTMLButtonElement).disabled).toBe(true)
++    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('approval transport offline') })
++    expect((screen.getByRole('button', { name: '允许一次' }) as HTMLButtonElement).disabled).toBe(false)
++
++    fireEvent.click(screen.getByRole('button', { name: '允许一次' }))
++    await waitFor(() => { expect(answer).toHaveBeenCalledTimes(2) })
++    expect(screen.queryByRole('alert')).toBeNull()
++  })
++
++  it('keeps the rejection outcome single-flight while the receipt is pending', async () => {
++    let resolve!: () => void
++    const answer = vi.fn(() => new Promise<void>((settle) => { resolve = settle }))
++    render(<ApprovalFlow pending={pending(answer)} t={t} />)
++
++    const reject = screen.getByRole('button', { name: '拒绝' })
++    fireEvent.click(reject)
++    fireEvent.click(reject)
++    expect(answer).toHaveBeenCalledTimes(1)
++    act(resolve)
++    await waitFor(() => { expect((screen.getByRole('button', { name: '拒绝' }) as HTMLButtonElement).disabled).toBe(true) })
++  })
++})
+diff --git a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+index 94354bd..996bf1a 100644
+--- a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+@@ -5,7 +5,7 @@
+ // decoration backdrop, error/notice strips, and the focus-keeping mousedown.
+ 
+ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+-import { act, cleanup, fireEvent, render } from '@testing-library/react'
++import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
+ import {
+   createSnapshotStore, EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
+@@ -1208,6 +1208,34 @@ describe('command launcher chrome and control seats', () => {
+     expect((view.getByLabelText(/^访问模式/) as HTMLButtonElement).disabled).toBe(false)
+   })
+ 
++  it('shows permission failures, restores the Host value, and retries the same preset', async () => {
++    const command = vi.fn()
++      .mockRejectedValueOnce(new Error('permission endpoint offline'))
++      .mockResolvedValueOnce(true)
++    const permissions = {
++      options: [
++        { value: 'read-only', name: 'read-only' },
++        { value: 'workspace-write', name: 'workspace-write' },
++      ],
++      currentValue: 'read-only',
++    }
++    const { view } = bench({ permissions, command })
++    fireEvent.click(view.getByLabelText(/^访问模式/))
++    fireEvent.click(view.getByRole('menuitem', { name: 'Workspace Write' }))
++
++    await waitFor(() => {
++      expect(view.getByRole('dialog', { name: '权限设置未生效' })).toBeTruthy()
++    })
++    expect(view.getByRole('alert').textContent).toBe('permission endpoint offline')
++    expect(view.getByLabelText(/^访问模式/).textContent).toBe('Read Only')
++    expect((view.getByLabelText(/^访问模式/) as HTMLButtonElement).disabled).toBe(false)
++
++    fireEvent.click(view.getByRole('button', { name: '重试' }))
++    await waitFor(() => { expect(command).toHaveBeenCalledTimes(2) })
++    expect(command).toHaveBeenLastCalledWith('/permission workspace-write')
++    expect(view.queryByRole('dialog')).toBeNull()
++  })
++
+   it('requires explicit risk acknowledgement before submitting Full access', async () => {
+     const command = vi.fn(() => Promise.resolve(true))
+     const permissions = {
+-- 
+2.54.0
+
