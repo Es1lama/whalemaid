@@ -353,8 +353,15 @@ class ProxyCore(
                             val serverAddr = normalizeServer(json.optString("server"))
                             val (code, _) = relayRequest(serverAddr, "/health")
                             if (code != 200) return jsonResponse(502, """{"error":"RELAY_UNREACHABLE"}""")
+                            val previousServers = buildSet {
+                                deviceStore.configuredServer()?.let(::add)
+                                deviceStore.devices().mapTo(this) { it.server }
+                            }
+                            val migrated = previousServers
+                                .filter { it != serverAddr }
+                                .sumOf { deviceStore.migrateServer(it, serverAddr) }
                             deviceStore.configureServer(serverAddr)
-                            jsonResponse(200, """{"ok":true}""")
+                            jsonResponse(200, """{"ok":true,"migrated":$migrated}""")
                         }
                         // UX-013：只回 registered/online 两个布尔，不向页面泄露路由权威。
                         TunnelHttp.Route.STATUS -> {

@@ -177,3 +177,18 @@
 | D-031 | "模拟器在我的电脑上，服务也在我的电脑上，本来就在一个局域网上，如果这样你还要专门桥接，未来推广怎么办？你要对着真正广泛推广的项目去做。不是玩具。……必须所有都按照上线指标来做。中间任何悄悄的降级是不对的。" | 中继已改 LAN 可路由监听（`lsof`：whalemaid-relay 监听 `*:9180`/`*:9443`）；修复 `--client` 缺失 bug（`packages/plugin/src/relay.ts:314`，此前 rathole 子进程从未启动，隧道从未建立）；BlueStacks App 直接填入 LAN 地址 `172.20.10.3:9180`（无 adb reverse、无 localhost 桥接）→ 中继 → noise 隧道 → 宿主 3181，实测官方 UI `<title>DeepSeek Harness</title>`、`session.list` 官方信封、V1 `/api/whalemaid/voice.transcribe`/`vision.describe` 全部经隧道透传成功（2026-08-17） | ✅ 对齐（上线拓扑的关键一环已按原话复核） |
 | D-032 | "受控端身份单位是加载 WhaleMaid 的准确 DSH profile/实例，不是整台电脑…同机可有多个不同工作状态的 DSH 实例。设备编号、长期/短期密码、中继凭据、隧道路由必须绑定所选插件实例，并继承该实例自己的会话、凭据、设置、工作区…" | 测试宿主 profile 的插件身份绑定到 profile 的 `ctx.baseUrl`：`.dsh-test/profiles/test/whalemaid/store.json` 设备号为 `WHALE-N2MC-43W6`（与旧的全局 `WHALE-D68Z-7HBK` 分开），长密码/中继凭据/临时密码状态全部在该 profile 自己的数据目录持久化；该 profile 的宿主实例装载官方 UI 并继承其会话（`session.list` 返回 5 项） | ◐ 部分（身份绑定与持久化已实测；同机多 profile 并发状态继承/短期密码完整链路仍待更多 profile 复核）
 
+## 第七轮：用户原话对齐审计（2026-08-18，主代理执行）
+
+> 本轮重点：合并 assist 分支、应用 DSH 工作区错误转发补丁、修复服务器地址切换后的已保存设备迁移，并完成 BlueStacks 真正入口全链路体验。
+
+| 指令 | 用户原话（摘录） | 实际结果（证据） | 判定 |
+|---|---|---|---|
+| D-031 | "必须所有都按照上线指标来做。中间任何悄悄的降级是不对的。" | BlueStacks 控制端经 `192.168.10.16:9180` 真实连接 relay；控制端状态 `connected:true`；从手机本地代理 `43969` 取得官方 UI `<title>DeepSeek Harness</title>`、`__DSH_BOOT__`、WebView polyfill；`session.list` 返回官方信封且 `ok=true`、5 个 session；`/api/events.mux` WebSocket `open`；rathole 5205 与 TLS 隧道 9443 均在同一链路上验证成功 | ✅ 对齐（BlueStacks 真实入口全链路通过；实体手机/公网拓扑仍属于发布前抽检） |
+| D-032 | "设备编号、长期/短期密码、中继凭据、隧道路由必须绑定所选插件实例" | 控制端先用一次性密码连接，再覆盖安装新 APK 保留 Keystore 数据；服务器地址由旧 `172.20.10.3:9180` 更新至当前 `192.168.10.16:9180`，`/_ctrl/configure` 返回 `migrated=1`，设备记录同步迁移；随后 `/_ctrl/connect-saved` 使用保存长期凭据成功，`session.list` 仍返回 5 项 | ✅ 对齐（当前 profile + 当前 LAN 地址 + 保存凭据已实测） |
+| DSH workspace error forwarding | "工作区选择/创建遇到权限/只读/attach 失败必须把宿主结构化错误转发到 UI，不能静默吞掉" | assist 分支已合并；DSH patch 应用到 `.tmp/spike/dsh`，修复 `IWorkspaces.startSession(): Promise<void>` 接口遗漏后 `build:lib:client` 与 `build:web` 通过；patched bundle 经手机代理可检出 `无法进入工作区` | ✅ 对齐 |
+
+### 本轮结果
+- 手机端可真实体验：打开 BlueStacks 中 WhaleMaid，控制端已保存当前服务器和设备；页面进入官方 DSH UI，API、事件流和 workspace 错误文案均经 relay/tunnel 到达。
+- 新增 Android 服务器切换自愈：配置新服务器时迁移所有旧地址设备及长期凭据索引，避免网络切换后设备列表指向 stale 地址。
+- 未宣称完成：实体手机、公网服务器、邮件/短信供应商、语音/视觉 key、一台发布服务器。
+

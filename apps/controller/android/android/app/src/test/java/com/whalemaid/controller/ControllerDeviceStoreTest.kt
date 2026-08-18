@@ -40,4 +40,17 @@ class ControllerDeviceStoreTest {
         assertEquals("relay.example:9080", store.configuredServer())
         assertTrue(store.devices().isEmpty())
     }
+
+    @Test
+    fun migratingServerPreservesSavedCredentialsAndUpdatesDeviceRoutes() {
+        val store = InMemoryControllerDeviceStore()
+        store.rememberLongTerm("relay-old.example:9080", "WHALE-A", "SECRET")
+
+        assertEquals(1, store.migrateServer("relay-old.example:9080", "relay-new.example:9080"))
+
+        assertEquals("relay-new.example:9080", store.configuredServer())
+        assertEquals("relay-new.example:9080", store.devices().single().server)
+        assertEquals("relay-new.example:9080", store.credential("WHALE-A")?.server)
+        assertEquals("SECRET", store.credential("WHALE-A")?.password)
+    }
 }
